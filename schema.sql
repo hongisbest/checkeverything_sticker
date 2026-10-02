@@ -1,0 +1,57 @@
+-- 별도 비교사이트 전용 테이블
+-- 기존 vc2_* 테이블 및 기존 R2 파일은 건드리지 않습니다.
+
+CREATE TABLE IF NOT EXISTS st_stickers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_key TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  name TEXT NOT NULL,
+  side_hint TEXT NOT NULL DEFAULT 'both',
+  guide_text TEXT NOT NULL DEFAULT '',
+  object_key TEXT NOT NULL UNIQUE,
+  content_type TEXT NOT NULL DEFAULT 'image/jpeg',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS st_rules (
+  id INTEGER PRIMARY KEY CHECK (id=1),
+  damage_normal_max REAL NOT NULL DEFAULT 10,
+  damage_replace_min REAL NOT NULL DEFAULT 30,
+  shape_similarity_min REAL NOT NULL DEFAULT 70,
+  color_difference_max REAL NOT NULL DEFAULT 35,
+  use_damage INTEGER NOT NULL DEFAULT 1,
+  use_shape INTEGER NOT NULL DEFAULT 1,
+  use_color INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO st_rules (
+  id,damage_normal_max,damage_replace_min,shape_similarity_min,color_difference_max,
+  use_damage,use_shape,use_color
+) VALUES (1,10,30,70,35,1,1,1);
+
+CREATE TABLE IF NOT EXISTS st_inspections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  employee_name TEXT NOT NULL,
+  employee_id TEXT NOT NULL DEFAULT '',
+  department TEXT NOT NULL DEFAULT '',
+  vehicle_no TEXT NOT NULL,
+  sticker_id INTEGER NOT NULL,
+  photo_object_key TEXT NOT NULL,
+  crop_x REAL NOT NULL DEFAULT 0,
+  crop_y REAL NOT NULL DEFAULT 0,
+  crop_width REAL NOT NULL DEFAULT 1,
+  crop_height REAL NOT NULL DEFAULT 1,
+  sticker_missing INTEGER NOT NULL DEFAULT 0,
+  score REAL NOT NULL,
+  status TEXT NOT NULL,
+  findings_json TEXT NOT NULL DEFAULT '[]',
+  metrics_json TEXT NOT NULL DEFAULT '{}',
+  admin_state TEXT NOT NULL DEFAULT '미확인',
+  admin_note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_st_stickers_active ON st_stickers(group_key,is_active);
+CREATE INDEX IF NOT EXISTS idx_st_insp_status ON st_inspections(status,admin_state);

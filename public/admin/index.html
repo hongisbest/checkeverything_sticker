@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>스티커 중심형 관리자</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main class="container">
+
+<section class="hero">
+  <div>
+    <p class="eyebrow">STICKER-BASED INSPECTION · ADMIN</p>
+    <h1>스티커 중심형 관리자</h1>
+    <p class="sub">차량 기준사진 대신 스티커 종류와 원본 이미지를 관리합니다.</p>
+  </div>
+  <span class="badge">COMPARE SITE</span>
+</section>
+
+<section id="loginPanel" class="card auth-card">
+  <h2>관리자 로그인</h2>
+  <div class="form-group" style="margin-top:14px">
+    <label>비밀번호</label>
+    <input id="password" type="password">
+  </div>
+  <button id="loginBtn" class="btn primary full" style="margin-top:12px">로그인</button>
+  <div id="loginMessage" class="message info">새 Worker에 설정한 ADMIN_PASSWORD를 입력하세요.</div>
+</section>
+
+<div id="adminPanel" class="hidden">
+<div class="admin-layout">
+
+<aside class="card side-nav">
+  <button class="btn primary" data-view="stickers">스티커 기준관리</button>
+  <button class="btn" data-view="rules">판정기준 설정</button>
+  <button class="btn" data-view="results">점검결과</button>
+  <button id="logoutBtn" class="btn">로그아웃</button>
+</aside>
+
+<div>
+
+<section id="stickersView">
+
+<section class="card">
+  <div class="section-head">
+    <div><span class="step">STICKER MASTER</span><h2>기준 스티커 등록</h2></div>
+  </div>
+
+  <div class="grid-2">
+    <div class="form-group">
+      <label>스티커명</label>
+      <input id="stickerName" type="text" placeholder="예: 회사 로고형 A">
+    </div>
+
+    <div class="form-group">
+      <label>권장 부착면</label>
+      <select id="sideHint">
+        <option value="both">좌·우 측면 공통</option>
+        <option value="driver">운전석 측면</option>
+        <option value="passenger">조수석 측면</option>
+        <option value="rear">후면</option>
+        <option value="front">전면</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="form-group" style="margin-top:12px">
+    <label>촬영 가이드</label>
+    <textarea id="guideTextInput" placeholder="예: 스티커 전체가 잘리지 않도록 정면에 가깝게 촬영"></textarea>
+  </div>
+
+  <div class="form-group" style="margin-top:12px">
+    <label>정상 스티커 이미지</label>
+    <input id="stickerFile" type="file" accept="image/*">
+  </div>
+
+  <div id="stickerPreview" class="preview-box hidden" style="margin-top:10px"></div>
+
+  <button id="uploadStickerBtn" class="btn primary" style="margin-top:12px">스티커 등록</button>
+  <div id="uploadStickerMessage" class="message info">가능하면 차량사진이 아니라 스티커 원본/정상 스티커만 보이는 이미지를 사용하세요.</div>
+</section>
+
+<section class="card">
+  <div class="section-head">
+    <div><span class="step">STICKER LIST</span><h2>등록된 스티커</h2></div>
+    <button id="refreshStickerBtn" class="btn small">새로고침</button>
+  </div>
+  <div id="stickerList" class="sticker-list"><div class="empty">불러오는 중...</div></div>
+</section>
+
+</section>
+
+<section id="rulesView" class="hidden">
+<section class="card">
+
+  <div class="section-head">
+    <div><span class="step">DECISION RULES</span><h2>자동판정 기준</h2></div>
+    <span id="rulesUpdatedAt" class="badge">기본값</span>
+  </div>
+
+  <div class="rules-grid">
+
+    <div class="rule-card">
+      <div class="rule-head">
+        <div><strong>손상 / 누락률</strong><span>스티커 일부 소실 여부</span></div>
+        <label class="switch-row"><input id="useDamage" type="checkbox"><span>사용</span></label>
+      </div>
+      <div class="rule-fields">
+        <div class="form-group">
+          <label>정상 허용 (%)</label>
+          <input id="damageNormalMax" type="number" min="0" max="100">
+        </div>
+        <div class="form-group">
+          <label>교체권고 (%)</label>
+          <input id="damageReplaceMin" type="number" min="0" max="100">
+        </div>
+      </div>
+    </div>
+
+    <div class="rule-card">
+      <div class="rule-head">
+        <div><strong>형상 유사도</strong><span>로고/문구/그래픽 변화</span></div>
+        <label class="switch-row"><input id="useShape" type="checkbox"><span>사용</span></label>
+      </div>
+      <div class="form-group">
+        <label>최소 유사도 (%)</label>
+        <input id="shapeSimilarityMin" type="number" min="0" max="100">
+      </div>
+    </div>
+
+    <div class="rule-card">
+      <div class="rule-head">
+        <div><strong>색상차이</strong><span>변색·오염 보조검사</span></div>
+        <label class="switch-row"><input id="useColor" type="checkbox"><span>사용</span></label>
+      </div>
+      <div class="form-group">
+        <label>허용 색상차이</label>
+        <input id="colorDifferenceMax" type="number" min="0" max="255">
+      </div>
+    </div>
+
+  </div>
+
+  <div id="ruleSummary" class="rule-summary">판정기준을 불러오는 중입니다.</div>
+
+  <div class="rule-actions">
+    <button id="resetRulesBtn" class="btn">기본값 입력</button>
+    <button id="saveRulesBtn" class="btn primary">판정기준 저장</button>
+  </div>
+
+  <div id="rulesMessage" class="message info">저장한 값은 신규 점검부터 바로 적용됩니다.</div>
+
+</section>
+</section>
+
+<section id="resultsView" class="hidden">
+<section class="card">
+
+  <div class="section-head">
+    <div><span class="step">DASHBOARD</span><h2>점검결과</h2></div>
+    <a class="btn secondary small" href="/api/admin/export.csv">CSV 다운로드</a>
+  </div>
+
+  <div class="dashboard-cards">
+    <div class="dashboard-card"><span>전체</span><strong id="countAll">0</strong></div>
+    <div class="dashboard-card"><span>정상</span><strong id="countNormal">0</strong></div>
+    <div class="dashboard-card"><span>확인필요</span><strong id="countReview">0</strong></div>
+    <div class="dashboard-card"><span>개선요청</span><strong id="countAction">0</strong></div>
+  </div>
+
+  <div class="filter-row">
+    <input id="resultSearch" type="text" placeholder="성명 / 차량번호 / 부서 / 스티커명">
+    <select id="statusFilter">
+      <option value="">자동판정 전체</option>
+      <option>정상</option>
+      <option>확인필요</option>
+    </select>
+    <select id="stateFilter">
+      <option value="">관리상태 전체</option>
+      <option>미확인</option>
+      <option>확인완료</option>
+      <option>개선요청</option>
+      <option>조치완료</option>
+    </select>
+    <button id="searchBtn" class="btn">조회</button>
+  </div>
+
+  <div id="inspectionList" class="inspection-list"></div>
+
+</section>
+</section>
+
+</div>
+</div>
+</div>
+
+<!-- sticker edit modal -->
+<div id="editModal" class="modal hidden">
+  <div class="modal-backdrop" data-close-edit></div>
+  <div class="modal-panel">
+    <button id="closeEditBtn" class="modal-close" type="button">×</button>
+    <span class="step">EDIT STICKER</span>
+    <h2>스티커 수정</h2>
+
+    <input id="editStickerId" type="hidden">
+
+    <div class="grid-2" style="margin-top:14px">
+      <div class="form-group">
+        <label>스티커명</label>
+        <input id="editStickerName" type="text">
+      </div>
+
+      <div class="form-group">
+        <label>권장 부착면</label>
+        <select id="editSideHint">
+          <option value="both">좌·우 측면 공통</option>
+          <option value="driver">운전석 측면</option>
+          <option value="passenger">조수석 측면</option>
+          <option value="rear">후면</option>
+          <option value="front">전면</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-top:12px">
+      <label>촬영 가이드</label>
+      <textarea id="editGuideText"></textarea>
+    </div>
+
+    <div class="grid-2" style="margin-top:12px">
+      <div>
+        <label class="help">현재 이미지</label>
+        <div id="editCurrentPreview" class="preview-box"></div>
+      </div>
+
+      <div class="form-group">
+        <label>새 이미지 (선택사항)</label>
+        <input id="editStickerFile" type="file" accept="image/*">
+        <div id="editNewPreview" class="preview-box hidden"></div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button id="cancelEditBtn" class="btn">취소</button>
+      <button id="saveEditBtn" class="btn primary">수정내용 저장</button>
+    </div>
+
+    <div id="editMessage" class="message info">기존 점검에 사용된 이미지를 바꾸면 과거 원본은 보존하고 새 버전을 만듭니다.</div>
+  </div>
+</div>
+
+<!-- image modal -->
+<div id="imageModal" class="modal hidden">
+  <div class="modal-backdrop" data-close-image></div>
+  <div class="modal-panel image-only">
+    <button id="closeImageBtn" class="modal-close" type="button">×</button>
+    <img id="imageModalImg" alt="점검사진 확대">
+  </div>
+</div>
+
+</main>
+<script src="/js/admin.js"></script>
+</body>
+</html>

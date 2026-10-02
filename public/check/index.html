@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<title>스티커 중심형 셀프점검</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main class="container">
+
+<section class="hero">
+  <div>
+    <p class="eyebrow">STICKER-BASED INSPECTION · COMPARE SITE</p>
+    <h1>홍보스티커 셀프점검</h1>
+    <p class="sub">차종과 차량색상 대신 스티커 자체를 기준으로 비교하는 별도 테스트 사이트입니다.</p>
+  </div>
+  <span class="badge">STICKER MODE</span>
+</section>
+
+<section class="card">
+  <div class="section-head">
+    <div><span class="step">STEP 01</span><h2>점검자 / 차량 정보</h2></div>
+  </div>
+  <div class="profile-grid">
+    <div class="form-group"><label>성명 *</label><input id="employeeName" type="text"></div>
+    <div class="form-group"><label>사번</label><input id="employeeId" type="text"></div>
+    <div class="form-group"><label>부서</label><input id="department" type="text"></div>
+    <div class="form-group"><label>차량번호 *</label><input id="vehicleNo" type="text"></div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="section-head">
+    <div><span class="step">STEP 02</span><h2>점검할 스티커 선택</h2></div>
+    <span id="configStatus" class="badge">불러오는 중</span>
+  </div>
+
+  <div id="stickerTabs" class="sticker-tabs"></div>
+
+  <div class="reference-layout">
+    <div id="referenceBox" class="reference-box">
+      <div class="empty">기준 스티커를 불러오는 중입니다.</div>
+    </div>
+    <div>
+      <span class="step">NORMAL STICKER</span>
+      <h3 id="stickerTitle">기준 스티커</h3>
+      <div id="sideHintText" class="message info">부착 위치</div>
+      <div id="guideText" class="message info">촬영가이드</div>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="section-head">
+    <div><span class="step">STEP 03</span><h2>차량사진 촬영 / 업로드</h2></div>
+    <span id="cameraStatus" class="badge">대기</span>
+  </div>
+
+  <div class="camera-stage">
+    <video id="cameraVideo" autoplay playsinline muted></video>
+    <div id="cameraPlaceholder" class="camera-placeholder">
+      <strong>차량에서 해당 스티커가 보이도록 촬영해 주세요.</strong>
+      <span>차종·차량색상은 달라도 됩니다.</span>
+    </div>
+  </div>
+
+  <div class="camera-controls">
+    <button id="startCameraBtn" class="btn primary">실시간 카메라 시작</button>
+    <button id="captureBtn" class="btn secondary" disabled>현재 화면 촬영</button>
+  </div>
+
+  <label class="btn full" style="margin-top:10px">
+    사진 촬영 / 앨범에서 선택
+    <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+  </label>
+
+  <canvas id="captureCanvas" hidden></canvas>
+</section>
+
+<section id="selectionSection" class="card hidden">
+  <div class="section-head">
+    <div><span class="step">STEP 04</span><h2>스티커 영역 지정</h2></div>
+    <span id="selectionStatus" class="badge">영역 선택</span>
+  </div>
+
+  <div class="message info">
+    차량 전체가 아니라 <b>스티커가 붙어 있는 부분만 최대한 타이트하게 드래그</b>하세요.
+    이 단계 때문에 차량 기종과 차체색 영향을 크게 줄일 수 있습니다.
+  </div>
+
+  <div id="selectionStage" class="selection-stage" style="margin-top:12px">
+    <img id="selectionImage" alt="점검사진">
+    <div id="selectionBox" class="selection-box hidden"></div>
+  </div>
+
+  <div class="selection-actions">
+    <button id="resetSelectionBtn" class="btn">영역 다시 선택</button>
+  </div>
+
+  <label class="missing-check" style="margin-top:10px">
+    <input id="stickerMissingCheck" type="checkbox">
+    <span>스티커가 완전히 없어 영역을 지정할 수 없음</span>
+  </label>
+
+  <button id="analyzeBtn" class="btn primary full" style="margin-top:12px" disabled>스티커 비교분석</button>
+</section>
+
+<section id="analysisSection" class="card hidden">
+  <div class="section-head">
+    <div><span class="step">STEP 05</span><h2>자동 비교 결과</h2></div>
+    <span id="resultStatus" class="badge">분석중</span>
+  </div>
+
+  <div class="result-layout">
+    <div>
+      <span class="step">FULL PHOTO</span>
+      <div id="resultPhoto" class="result-photo"></div>
+    </div>
+    <div>
+      <span class="step">SELECTED STICKER AREA</span>
+      <div id="resultCrop" class="result-crop"></div>
+    </div>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="metric"><span>종합점수</span><strong id="scoreValue">-</strong></div>
+    <div class="metric"><span>추정 누락/손상률</span><strong id="damageValue">-</strong></div>
+    <div class="metric"><span>형상 유사도</span><strong id="shapeValue">-</strong></div>
+    <div class="metric"><span>색상차이</span><strong id="colorValue">-</strong></div>
+  </div>
+
+  <div id="findings" class="findings"></div>
+
+  <div class="message warn">
+    이 비교형 사이트는 차종 독립성을 위해 사용자가 스티커 영역을 직접 지정합니다.
+    자동판정은 1차 스크리닝이며 최종 확인은 관리자가 수행합니다.
+  </div>
+
+  <button id="submitBtn" class="btn primary full" style="margin-top:14px">점검결과 제출</button>
+  <div id="submitMessage" class="message info">원본 차량사진과 선택영역 좌표, 분석결과가 저장됩니다.</div>
+</section>
+
+</main>
+<script src="/js/check.js"></script>
+</body>
+</html>
