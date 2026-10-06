@@ -1,5 +1,13 @@
 const $=id=>document.getElementById(id);
-const S={stickers:[]};
+const S={
+  stickers:[],
+  examples:[],
+  exampleStickerId:null,
+  roiExampleId:null,
+  roiDrawing:false,
+  roiStart:null,
+  roiDraft:null
+};
 
 document.addEventListener("DOMContentLoaded",()=>{
   bind();
@@ -14,6 +22,18 @@ function bind(){
   $("uploadStickerBtn").onclick=uploadSticker;
   $("refreshStickerBtn").onclick=loadStickers;
   $("stickerFile").onchange=previewNewSticker;
+  $("exampleFiles").onchange=updateExampleFileInfo;
+
+  $("closeExamplesBtn").onclick=closeExamples;
+  document.querySelector("[data-close-examples]").onclick=closeExamples;
+  $("addExamplesBtn").onclick=addExamples;
+
+  $("closeExampleRoiBtn").onclick=closeExampleRoi;
+  $("resetExampleRoiBtn").onclick=resetExampleRoi;
+  $("saveExampleRoiBtn").onclick=saveExampleRoi;
+  $("exampleRoiStage").addEventListener("pointerdown",startExampleRoi);
+  $("exampleRoiStage").addEventListener("pointermove",moveExampleRoi);
+  window.addEventListener("pointerup",endExampleRoi);
 
   $("saveRulesBtn").onclick=saveRules;
   $("resetRulesBtn").onclick=()=>{
@@ -43,6 +63,8 @@ function bind(){
     if(e.key==="Escape"){
       closeImage();
       closeEdit();
+      closeExampleRoi();
+      closeExamples();
     }
   });
 }
@@ -113,52 +135,71 @@ async function previewNewSticker(){
   }
 
   try{
-    const blob=await compressImage(file,1600,.9);
+    const blob=await prepareMasterImage(file,1600);
     const url=URL.createObjectURL(blob);
 
-    $("stickerPreview").innerHTML=`<img src="${url}" alt="미리보기">`;
+    $("stickerPreview").innerHTML=`<img src="${url}" alt="스티커 원본 미리보기">`;
     $("stickerPreview").classList.remove("hidden");
   }catch{
     $("stickerPreview").classList.add("hidden");
   }
 }
 
+function updateExampleFileInfo(){
+  const files=[...$("exampleFiles").files];
+  $("exampleFileInfo").textContent=files.length
+    ? `${files.length}장 선택됨 · 첫 번째 사진이 촬영가이드 1번으로 등록됩니다.`
+    : "정상부착 예시사진을 1장 이상 선택해 주세요.";
+}
+
 async function uploadSticker(){
   const name=$("stickerName").value.trim();
   const file=$("stickerFile").files[0];
+  const examples=[...$("exampleFiles").files];
 
-  if(!name||!file){
-    msg("uploadStickerMessage","스티커명과 이미지를 입력해 주세요.","error");
+  if(!name||!file||!examples.length){
+    msg("uploadStickerMessage","스티커명, 정상 스티커 원본, 정상부착 예시사진을 모두 입력해 주세요.","error");
     return;
   }
 
   $("uploadStickerBtn").disabled=true;
-  msg("uploadStickerMessage","이미지를 최적화하고 등록 중입니다...","info");
+  msg("uploadStickerMessage","스티커 원본과 정상부착 예시사진을 등록 중입니다...","info");
 
   try{
-    const optimized=await compressImage(file,1600,.9);
+    const master=await prepareMasterImage(file,1600);
 
     const fd=new FormData();
     fd.append("name",name);
     fd.append("side_hint",$("sideHint").value);
     fd.append("guide_text",$("guideTextInput").value.trim());
-    fd.append("file",optimized,"sticker-reference.jpg");
+    fd.append("file",master,master.type==="image/png"?"sticker-master.png":"sticker-master.jpg");
+
+    for(const ex of examples){
+      const optimized=await compressImage(ex,1800,.9);
+      fd.append("examples",optimized,"normal-example.jpg");
+    }
 
     const r=await fetchTimeout("/api/admin/stickers",{
       method:"POST",
       body:fd
-    },30000);
+    },45000);
 
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"등록 실패");
 
     $("stickerName").value="";
     $("stickerFile").value="";
+    $("exampleFiles").value="";
     $("stickerPreview").innerHTML="";
     $("stickerPreview").classList.add("hidden");
+    updateExampleFileInfo();
 
-    msg("uploadStickerMessage","등록 완료.","success");
+    msg("uploadStickerMessage",d.message||"등록 완료.","success");
     await loadStickers();
+
+    if(d.id){
+      setTimeout(()=>openExamples(d.id),500);
+    }
   }catch(e){
     msg("uploadStickerMessage",e.message,"error");
   }finally{
@@ -190,10 +231,12 @@ async function loadStickers(){
             <div style="margin-top:5px">
               ${Number(x.is_active)===1?'<span class="pill active">활성</span>':''}
               ${Number(x.version_count)>1?`<span class="pill">버전 ${x.version_count}개</span>`:''}
+              <span class="pill ${Number(x.calibrated_count)>0?"normal":"review"}">예시 ${Number(x.calibrated_count||0)}/${Number(x.example_count||0)} 영역설정</span>
             </div>
           </div>
           <div class="row-actions">
             <button class="btn small secondary" onclick="openEdit(${x.id})">수정</button>
+            <button class="btn small secondary" onclick="openExamples(${x.id})">예시사진 관리</button>
             <button class="btn small" onclick="activateSticker(${x.id})" ${Number(x.is_active)===1?"disabled":""}>활성화</button>
             <button class="btn small danger" onclick="deleteSticker(${x.id})">삭제</button>
           </div>
@@ -203,6 +246,260 @@ async function loadStickers(){
 
   }catch(e){
     $("stickerList").innerHTML=`<div class="message error">${esc(e.message)}</div>`;
+  }
+}
+
+
+window.openExamples=async function(id){
+  const sticker=S.stickers.find(x=>Number(x.id)===Number(id));
+  S.exampleStickerId=id;
+  $("examplesModalTitle").textContent=`${sticker?.name||"스티커"} · 정상부착 예시사진`;
+  $("examplesModal").classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  await loadExamples();
+};
+
+function closeExamples(){
+  if(!$("examplesModal"))return;
+  if(!$("exampleRoiModal").classList.contains("hidden"))return;
+  $("examplesModal").classList.add("hidden");
+  if($("imageModal").classList.contains("hidden")&&$("editModal").classList.contains("hidden")){
+    document.body.classList.remove("modal-open");
+  }
+}
+
+async function loadExamples(){
+  if(!S.exampleStickerId)return;
+
+  $("examplesList").innerHTML='<div class="empty">불러오는 중...</div>';
+
+  try{
+    const r=await fetchTimeout(`/api/admin/stickers/${S.exampleStickerId}/examples`,{cache:"no-store"},15000);
+    const d=await r.json();
+
+    if(!r.ok)throw new Error(d.error||"예시사진 조회 실패");
+
+    S.examples=d.items||[];
+
+    $("examplesList").innerHTML=S.examples.length
+      ? S.examples.map((x,i)=>`
+        <div class="example-row">
+          <img src="${x.image_url}?v=${Date.now()}" alt="정상부착 예시">
+          <div>
+            <strong>예시사진 ${i+1}</strong>
+            <div style="margin-top:5px">
+              ${Number(x.is_guide)===1?'<span class="pill active">촬영가이드 1번</span>':''}
+              ${x.calibrated?'<span class="pill normal">스티커영역 설정완료</span>':'<span class="pill review">영역설정 필요</span>'}
+            </div>
+          </div>
+          <div class="row-actions">
+            <button class="btn small primary" onclick="openExampleRoi(${x.id})">영역설정</button>
+            <button class="btn small" onclick="setGuideExample(${x.id})" ${Number(x.is_guide)===1?"disabled":""}>가이드 지정</button>
+            <button class="btn small danger" onclick="deleteExample(${x.id})">삭제</button>
+          </div>
+        </div>
+      `).join("")
+      : '<div class="empty">예시사진이 없습니다.</div>';
+
+    const calibrated=S.examples.filter(x=>x.calibrated).length;
+    msg("examplesMessage",`예시 ${S.examples.length}장 · 스티커영역 설정완료 ${calibrated}장`,"info");
+  }catch(e){
+    $("examplesList").innerHTML=`<div class="message error">${esc(e.message)}</div>`;
+  }
+}
+
+async function addExamples(){
+  const files=[...$("addExampleFiles").files];
+
+  if(!files.length){
+    msg("examplesMessage","추가할 예시사진을 선택해 주세요.","error");
+    return;
+  }
+
+  $("addExamplesBtn").disabled=true;
+  msg("examplesMessage","예시사진을 추가 중입니다...","info");
+
+  try{
+    const fd=new FormData();
+
+    for(const file of files){
+      const optimized=await compressImage(file,1800,.9);
+      fd.append("files",optimized,"normal-example.jpg");
+    }
+
+    const r=await fetchTimeout(`/api/admin/stickers/${S.exampleStickerId}/examples`,{
+      method:"POST",
+      body:fd
+    },45000);
+
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||"추가 실패");
+
+    $("addExampleFiles").value="";
+    await loadExamples();
+    await loadStickers();
+  }catch(e){
+    msg("examplesMessage",e.message,"error");
+  }finally{
+    $("addExamplesBtn").disabled=false;
+  }
+}
+
+window.setGuideExample=async function(id){
+  try{
+    const r=await fetchTimeout(`/api/admin/examples/${id}/guide`,{method:"POST"},12000);
+    const d=await r.json();
+
+    if(!r.ok)throw new Error(d.error||"가이드 지정 실패");
+
+    await loadExamples();
+  }catch(e){
+    alert(e.message);
+  }
+};
+
+window.deleteExample=async function(id){
+  if(!confirm("이 정상부착 예시사진을 삭제할까요?"))return;
+
+  try{
+    const r=await fetchTimeout(`/api/admin/examples/${id}`,{method:"DELETE"},15000);
+    const d=await r.json();
+
+    if(!r.ok)throw new Error(d.error||"삭제 실패");
+
+    await loadExamples();
+    await loadStickers();
+  }catch(e){
+    alert(e.message);
+  }
+};
+
+window.openExampleRoi=function(id){
+  const ex=S.examples.find(x=>Number(x.id)===Number(id));
+  if(!ex)return;
+
+  S.roiExampleId=id;
+  S.roiDraft=ex.calibrated
+    ? {x:Number(ex.crop_x),y:Number(ex.crop_y),width:Number(ex.crop_width),height:Number(ex.crop_height)}
+    : null;
+
+  $("exampleRoiImage").src=`${ex.image_url}?v=${Date.now()}`;
+  $("exampleRoiModal").classList.remove("hidden");
+  $("examplesModal").classList.add("hidden");
+
+  if(S.roiDraft){
+    $("exampleRoiBox").classList.remove("hidden");
+    renderExampleRoi();
+    $("saveExampleRoiBtn").disabled=false;
+  }else{
+    resetExampleRoi();
+  }
+};
+
+function closeExampleRoi(){
+  if(!$("exampleRoiModal"))return;
+  if($("exampleRoiModal").classList.contains("hidden"))return;
+
+  $("exampleRoiModal").classList.add("hidden");
+  $("examplesModal").classList.remove("hidden");
+  S.roiDrawing=false;
+  S.roiStart=null;
+}
+
+function roiPoint(e){
+  const r=$("exampleRoiStage").getBoundingClientRect();
+
+  return{
+    x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),
+    y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))
+  };
+}
+
+function startExampleRoi(e){
+  if(!S.roiExampleId)return;
+  e.preventDefault();
+
+  S.roiDrawing=true;
+  S.roiStart=roiPoint(e);
+  S.roiDraft={x:S.roiStart.x,y:S.roiStart.y,width:0,height:0};
+
+  $("exampleRoiBox").classList.remove("hidden");
+  renderExampleRoi();
+}
+
+function moveExampleRoi(e){
+  if(!S.roiDrawing)return;
+
+  const p=roiPoint(e);
+
+  S.roiDraft={
+    x:Math.min(S.roiStart.x,p.x),
+    y:Math.min(S.roiStart.y,p.y),
+    width:Math.abs(p.x-S.roiStart.x),
+    height:Math.abs(p.y-S.roiStart.y)
+  };
+
+  renderExampleRoi();
+}
+
+function endExampleRoi(){
+  if(!S.roiDrawing)return;
+  S.roiDrawing=false;
+
+  if(!S.roiDraft||S.roiDraft.width<.02||S.roiDraft.height<.02){
+    resetExampleRoi();
+    return;
+  }
+
+  $("saveExampleRoiBtn").disabled=false;
+}
+
+function renderExampleRoi(){
+  if(!S.roiDraft)return;
+
+  const b=S.roiDraft;
+  Object.assign($("exampleRoiBox").style,{
+    left:`${b.x*100}%`,
+    top:`${b.y*100}%`,
+    width:`${b.width*100}%`,
+    height:`${b.height*100}%`
+  });
+}
+
+function resetExampleRoi(){
+  S.roiDraft=null;
+  S.roiDrawing=false;
+  S.roiStart=null;
+
+  $("exampleRoiBox").classList.add("hidden");
+  $("saveExampleRoiBtn").disabled=true;
+  msg("exampleRoiMessage","차량이나 문손잡이를 제외하고 실제 스티커 전체만 드래그해 주세요.","info");
+}
+
+async function saveExampleRoi(){
+  if(!S.roiExampleId||!S.roiDraft)return;
+
+  $("saveExampleRoiBtn").disabled=true;
+  msg("exampleRoiMessage","스티커 영역을 저장 중입니다...","info");
+
+  try{
+    const r=await fetchTimeout(`/api/admin/examples/${S.roiExampleId}/roi`,{
+      method:"PATCH",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify(S.roiDraft)
+    },12000);
+
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||"영역 저장 실패");
+
+    msg("exampleRoiMessage","스티커 영역 저장 완료","success");
+    await loadExamples();
+    await loadStickers();
+
+    setTimeout(closeExampleRoi,500);
+  }catch(e){
+    msg("exampleRoiMessage",e.message,"error");
+    $("saveExampleRoiBtn").disabled=false;
   }
 }
 
@@ -270,7 +567,7 @@ async function previewEditFile(){
   }
 
   try{
-    const blob=await compressImage(file,1600,.9);
+    const blob=await prepareMasterImage(file,1600);
     const url=URL.createObjectURL(blob);
 
     $("editNewPreview").innerHTML=`<img src="${url}" alt="새 이미지">`;
@@ -301,8 +598,8 @@ async function saveStickerEdit(){
     const file=$("editStickerFile").files[0];
 
     if(file){
-      const optimized=await compressImage(file,1600,.9);
-      fd.append("file",optimized,"sticker-edit.jpg");
+      const optimized=await prepareMasterImage(file,1600);
+      fd.append("file",optimized,optimized.type==="image/png"?"sticker-edit.png":"sticker-edit.jpg");
     }
 
     const r=await fetchTimeout(`/api/admin/stickers/${id}`,{
@@ -368,7 +665,7 @@ function updateRuleSummary(){
   }
 
   if(r.use_shape){
-    parts.push(`형상 유사도 ${r.shape_similarity_min}% 미만 확인필요`);
+    parts.push(`구조 보존율 ${r.shape_similarity_min}% 미만 확인필요`);
   }
 
   if(r.use_color){
@@ -470,6 +767,7 @@ async function loadInspections(){
     $("countAll").textContent=items.length;
     $("countNormal").textContent=items.filter(x=>x.status==="정상").length;
     $("countReview").textContent=items.filter(x=>x.status==="확인필요").length;
+    $("countInvalid").textContent=items.filter(x=>x.status==="판정불가").length;
     $("countAction").textContent=items.filter(x=>x.admin_state==="개선요청").length;
 
     $("inspectionList").innerHTML=items.length
@@ -492,7 +790,7 @@ async function loadInspections(){
                   <strong>${esc(x.vehicle_no)} · ${esc(x.employee_name)}</strong>
                   <span>${esc(x.department||"-")} · ${esc(x.sticker_name||"-")} v${esc(x.sticker_version||"-")}</span>
                   <span>점수 ${Number(x.score).toFixed(1)} · <b>${esc(x.status)}</b></span>
-                  <span>추정 손상률 ${Number(metrics.damage??0).toFixed(1)}% · 형상 ${Number(metrics.shape??0).toFixed(1)}%</span>
+                  <span>구조 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%</span>
                   <span>${esc(findings.join(" / "))}</span>
                   <span class="muted">${esc(x.created_at)}</span>
                 </div>
@@ -549,6 +847,35 @@ function closeImage(){
   $("imageModal").classList.add("hidden");
   $("imageModalImg").src="";
   document.body.classList.remove("modal-open");
+}
+
+
+async function prepareMasterImage(file,maxSide){
+  const img=await blobImage(file);
+  const scale=Math.min(1,maxSide/Math.max(img.naturalWidth,img.naturalHeight));
+
+  const c=document.createElement("canvas");
+  c.width=Math.max(1,Math.round(img.naturalWidth*scale));
+  c.height=Math.max(1,Math.round(img.naturalHeight*scale));
+
+  c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+
+  if(file.type==="image/png"){
+    return new Promise((resolve,reject)=>{
+      c.toBlob(
+        b=>b?resolve(b):reject(new Error("PNG 변환 실패")),
+        "image/png"
+      );
+    });
+  }
+
+  return new Promise((resolve,reject)=>{
+    c.toBlob(
+      b=>b?resolve(b):reject(new Error("이미지 변환 실패")),
+      "image/jpeg",
+      .92
+    );
+  });
 }
 
 async function compressImage(file,maxSide,quality){

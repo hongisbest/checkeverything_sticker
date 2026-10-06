@@ -83,3 +83,30 @@ Backend / D1 / R2 / Admin / schema / wrangler는 변경하지 않았습니다.
 - 분석 crop은 기준 스티커 비율로 자동 보정
 - 7개 crop ensemble 중앙값 적용
 - 제출 시 사용자가 그린 raw crop 대신 실제 분석 crop 좌표 저장
+
+
+## V5 검증
+1. 데이터 보존
+- 기존 st_stickers / st_rules / st_inspections / st_analysis_cache 유지
+- 신규 st_examples 테이블만 추가
+- DROP / TRUNCATE 없음
+- 기존 inspection R2 파일 삭제 없음
+
+2. 기준 구조
+- 스티커 원본은 st_stickers에 유지
+- 정상부착 예시는 st_examples에 별도 저장
+- 예시사진 1번을 사용자 가이드로 사용
+- 예시 ROI 변경 시 해당 스티커 분석 캐시 자동 초기화
+
+3. 판정 로직
+- 스티커 원본 HOG 구조 특징 추출
+- 정상부착 예시 ROI들과 원본을 비교해 정상 변동범위 캘리브레이션
+- 정상 예시에서 안정적으로 보존되는 셀만 손상 계산에 사용
+- 정상 예시 간 변동폭(MAD)을 자동 허용오차로 반영
+- 검출신뢰도가 낮으면 판정불가
+
+4. 배포 보존
+- Worker 이름 / D1 ID / R2 bucket / Assets 설정 변경 없음
+- 기존 관리자 로그인 / 결과관리 / CSV / 사진확대 유지
+
+- 분석 캐시 알고리즘 버전: `v5-master-calibrated`

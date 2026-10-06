@@ -95,7 +95,22 @@ function ensureSchema(env) {
         metrics_json TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         PRIMARY KEY (sticker_id, algorithm_version, image_hash)
-      )`)
+      )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_examples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sticker_id INTEGER NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 1,
+        object_key TEXT NOT NULL,
+        content_type TEXT NOT NULL DEFAULT 'image/jpeg',
+        crop_x REAL,
+        crop_y REAL,
+        crop_width REAL,
+        crop_height REAL,
+        is_guide INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`),
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_examples_sticker ON st_examples(sticker_id, sort_order, id)")
     ]).catch(e => {
       schemaPromise = null;
       throw e;
@@ -119,6 +134,11 @@ async function api(request, env, url) {
     return getStickerImage(env, Number(stickerImage[1]));
   }
 
+  const exampleImage = p.match(/^\/api\/example\/(\d+)\/image$/);
+  if (exampleImage && request.method === "GET") {
+    return getExampleImage(env, Number(exampleImage[1]));
+  }
+
   // Auth
   if (p === "/api/admin/login" && request.method === "POST") return adminLogin(request, env);
   if (p === "/api/admin/logout" && request.method === "POST") return adminLogout();
@@ -139,6 +159,19 @@ async function api(request, env, url) {
 
   const stickerActivate = p.match(/^\/api\/admin\/stickers\/(\d+)\/activate$/);
   if (stickerActivate && request.method === "POST") return activateSticker(env, Number(stickerActivate[1]));
+
+  const stickerExamples = p.match(/^\/api\/admin\/stickers\/(\d+)\/examples$/);
+  if (stickerExamples && request.method === "GET") return listExamples(env, Number(stickerExamples[1]));
+  if (stickerExamples && request.method === "POST") return addExamples(request, env, Number(stickerExamples[1]));
+
+  const exampleRoi = p.match(/^\/api\/admin\/examples\/(\d+)\/roi$/);
+  if (exampleRoi && request.method === "PATCH") return updateExampleRoi(request, env, Number(exampleRoi[1]));
+
+  const exampleGuide = p.match(/^\/api\/admin\/examples\/(\d+)\/guide$/);
+  if (exampleGuide && request.method === "POST") return setGuideExample(env, Number(exampleGuide[1]));
+
+  const exampleDelete = p.match(/^\/api\/admin\/examples\/(\d+)$/);
+  if (exampleDelete && request.method === "DELETE") return deleteExample(env, Number(exampleDelete[1]));
 
   // Rules
   if (p === "/api/admin/rules" && request.method === "GET") return j({ok:true,rules:await readRules(env)});
@@ -232,10 +265,34 @@ async function getConfig(env) {
     ORDER BY name ASC, id DESC
   `).all();
 
-  const stickers = (rows.results || []).map(r => ({
-    ...r,
-    image_url:`/api/sticker/${r.id}/image`
-  }));
+  const stickers=[];
+
+  for (const r of rows.results || []) {
+    const examples = await env.DB.prepare(`
+      SELECT id,sort_order,crop_x,crop_y,crop_width,crop_height,is_guide,created_at,updated_at
+      FROM st_examples
+      WHERE sticker_id=?
+      ORDER BY is_guide DESC,sort_order ASC,id ASC
+    `).bind(r.id).all();
+
+    const ex=(examples.results || []).map(x=>({
+      ...x,
+      image_url:`/api/example/${x.id}/image`,
+      calibrated:
+        x.crop_x!==null && x.crop_y!==null &&
+        x.crop_width!==null && x.crop_height!==null
+    }));
+
+    const guide = ex.find(x=>Number(x.is_guide)===1) || ex[0] || null;
+
+    stickers.push({
+      ...r,
+      image_url:`/api/sticker/${r.id}/image`,
+      examples:ex,
+      guide_example:guide,
+      calibrated_example_count:ex.filter(x=>x.calibrated).length
+    });
+  }
 
   return j({ok:true,stickers,rules:await readRules(env)});
 }
@@ -243,19 +300,28 @@ async function getConfig(env) {
 async function createSticker(request, env) {
   const form = await request.formData();
   const file = form.get("file");
+  const examples = form.getAll("examples").filter(x=>x && typeof x!=="string" && Number(x.size||0)>0);
   const name = txt(form.get("name"),100);
   const sideHint = txt(form.get("side_hint"),30) || "both";
   const guideText = txt(form.get("guide_text"),1000);
 
-  if (!file || typeof file === "string") return j({ok:false,error:"기준 스티커 이미지를 선택해 주세요."},400);
+  if (!file || typeof file === "string") return j({ok:false,error:"정상 스티커 원본을 선택해 주세요."},400);
   if (!name) return j({ok:false,error:"스티커명을 입력해 주세요."},400);
   if (!file.type.startsWith("image/")) return j({ok:false,error:"이미지 파일만 등록할 수 있습니다."},400);
-  if (file.size > 8*1024*1024) return j({ok:false,error:"이미지는 8MB 이하로 등록해 주세요."},400);
+  if (file.size > 8*1024*1024) return j({ok:false,error:"스티커 원본은 8MB 이하로 등록해 주세요."},400);
+  if (!examples.length) return j({ok:false,error:"정상부착 예시사진을 1장 이상 등록해 주세요."},400);
+  if (examples.length > 8) return j({ok:false,error:"정상부착 예시사진은 한 번에 최대 8장까지 등록할 수 있습니다."},400);
+
+  for (const ex of examples) {
+    if (!ex.type.startsWith("image/")) return j({ok:false,error:"예시사진은 이미지 파일만 등록할 수 있습니다."},400);
+    if (ex.size > 8*1024*1024) return j({ok:false,error:"예시사진은 장당 8MB 이하로 등록해 주세요."},400);
+  }
 
   const groupKey = crypto.randomUUID();
-  const key = `sticker-compare/reference/${Date.now()}-${crypto.randomUUID()}.${ext(file.type)}`;
+  const masterKey = `sticker-compare/reference/${Date.now()}-${crypto.randomUUID()}.${ext(file.type)}`;
+  const createdKeys=[masterKey];
 
-  await env.STORAGE.put(key,file.stream(),{
+  await env.STORAGE.put(masterKey,file.stream(),{
     httpMetadata:{contentType:file.type,cacheControl:"private,max-age=0"}
   });
 
@@ -265,11 +331,35 @@ async function createSticker(request, env) {
         group_key,version,name,side_hint,guide_text,object_key,content_type,is_active
       ) VALUES(?,1,?,?,?,?,?,1)
       RETURNING id
-    `).bind(groupKey,name,sideHint,guideText,key,file.type).first();
+    `).bind(groupKey,name,sideHint,guideText,masterKey,file.type).first();
 
-    return j({ok:true,id:inserted?.id});
+    let order=1;
+    for (const ex of examples) {
+      const key=`sticker-compare/examples/${Date.now()}-${crypto.randomUUID()}.${ext(ex.type)}`;
+      createdKeys.push(key);
+
+      await env.STORAGE.put(key,ex.stream(),{
+        httpMetadata:{contentType:ex.type,cacheControl:"private,max-age=0"}
+      });
+
+      await env.DB.prepare(`
+        INSERT INTO st_examples(
+          sticker_id,sort_order,object_key,content_type,is_guide
+        ) VALUES(?,?,?,?,?)
+      `).bind(inserted.id,order,key,ex.type,order===1?1:0).run();
+
+      order++;
+    }
+
+    return j({
+      ok:true,
+      id:inserted?.id,
+      message:"스티커 원본과 정상부착 예시사진을 등록했습니다. 예시사진의 스티커 영역을 지정해 주세요."
+    });
   } catch (e) {
-    await env.STORAGE.delete(key);
+    for (const key of createdKeys) {
+      try { await env.STORAGE.delete(key); } catch {}
+    }
     throw e;
   }
 }
@@ -278,7 +368,12 @@ async function listStickers(env) {
   const rows = await env.DB.prepare(`
     SELECT s.id,s.group_key,s.version,s.name,s.side_hint,s.guide_text,s.is_active,s.created_at,
            (SELECT COUNT(*) FROM st_inspections i WHERE i.sticker_id=s.id) usage_count,
-           (SELECT COUNT(*) FROM st_stickers h WHERE h.group_key=s.group_key) version_count
+           (SELECT COUNT(*) FROM st_stickers h WHERE h.group_key=s.group_key) version_count,
+           (SELECT COUNT(*) FROM st_examples e WHERE e.sticker_id=s.id) example_count,
+           (SELECT COUNT(*) FROM st_examples e
+             WHERE e.sticker_id=s.id
+               AND e.crop_x IS NOT NULL AND e.crop_y IS NOT NULL
+               AND e.crop_width IS NOT NULL AND e.crop_height IS NOT NULL) calibrated_count
     FROM st_stickers s
     ORDER BY s.group_key,s.version DESC
   `).all();
@@ -337,6 +432,17 @@ async function updateSticker(request, env, id) {
         current.group_key,nextVersion,name,sideHint,guideText,key,file.type
       ).first();
 
+      await env.DB.prepare(`
+        INSERT INTO st_examples(
+          sticker_id,sort_order,object_key,content_type,
+          crop_x,crop_y,crop_width,crop_height,is_guide
+        )
+        SELECT ?,sort_order,object_key,content_type,
+               crop_x,crop_y,crop_width,crop_height,is_guide
+        FROM st_examples
+        WHERE sticker_id=?
+      `).bind(inserted.id,id).run();
+
       return j({
         ok:true,
         id:inserted?.id,
@@ -370,6 +476,10 @@ async function updateSticker(request, env, id) {
       SET name=?,side_hint=?,guide_text=?,object_key=?,content_type=?
       WHERE id=?
     `).bind(name,sideHint,guideText,newKey,newType,id).run();
+
+    if (hasFile) {
+      await env.DB.prepare("DELETE FROM st_analysis_cache WHERE sticker_id=?").bind(id).run();
+    }
 
     if (oldKey && oldKey !== newKey) {
       await env.STORAGE.delete(oldKey);
@@ -416,10 +526,205 @@ async function deleteSticker(env, id) {
     },409);
   }
 
+  const examples = await env.DB.prepare(
+    "SELECT id,object_key FROM st_examples WHERE sticker_id=?"
+  ).bind(id).all();
+
+  for (const ex of examples.results || []) {
+    await env.DB.prepare("DELETE FROM st_examples WHERE id=?").bind(ex.id).run();
+
+    const refs = await env.DB.prepare(
+      "SELECT COUNT(*) AS c FROM st_examples WHERE object_key=?"
+    ).bind(ex.object_key).first();
+
+    if (Number(refs?.c || 0)===0) {
+      await env.STORAGE.delete(ex.object_key);
+    }
+  }
+
   await env.STORAGE.delete(row.object_key);
+  await env.DB.prepare("DELETE FROM st_analysis_cache WHERE sticker_id=?").bind(id).run();
   await env.DB.prepare("DELETE FROM st_stickers WHERE id=?").bind(id).run();
 
   return j({ok:true});
+}
+
+
+async function listExamples(env, stickerId) {
+  const sticker = await env.DB.prepare("SELECT id,name FROM st_stickers WHERE id=?")
+    .bind(stickerId).first();
+
+  if (!sticker) return j({ok:false,error:"스티커를 찾을 수 없습니다."},404);
+
+  const rows = await env.DB.prepare(`
+    SELECT id,sort_order,crop_x,crop_y,crop_width,crop_height,is_guide,created_at,updated_at
+    FROM st_examples
+    WHERE sticker_id=?
+    ORDER BY is_guide DESC,sort_order ASC,id ASC
+  `).bind(stickerId).all();
+
+  return j({
+    ok:true,
+    sticker,
+    items:(rows.results || []).map(x=>({
+      ...x,
+      image_url:`/api/example/${x.id}/image`,
+      calibrated:
+        x.crop_x!==null && x.crop_y!==null &&
+        x.crop_width!==null && x.crop_height!==null
+    }))
+  });
+}
+
+async function addExamples(request, env, stickerId) {
+  const sticker = await env.DB.prepare("SELECT id FROM st_stickers WHERE id=?")
+    .bind(stickerId).first();
+
+  if (!sticker) return j({ok:false,error:"스티커를 찾을 수 없습니다."},404);
+
+  const form=await request.formData();
+  const files=form.getAll("files").filter(x=>x && typeof x!=="string" && Number(x.size||0)>0);
+
+  if (!files.length) return j({ok:false,error:"추가할 예시사진을 선택해 주세요."},400);
+  if (files.length>8) return j({ok:false,error:"한 번에 최대 8장까지 추가할 수 있습니다."},400);
+
+  const count = await env.DB.prepare("SELECT COUNT(*) AS c FROM st_examples WHERE sticker_id=?")
+    .bind(stickerId).first();
+
+  let order=Number(count?.c || 0)+1;
+  let hasGuide=Number((await env.DB.prepare(
+    "SELECT COUNT(*) AS c FROM st_examples WHERE sticker_id=? AND is_guide=1"
+  ).bind(stickerId).first())?.c || 0)>0;
+
+  const created=[];
+
+  try {
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) throw new Error("예시사진은 이미지 파일만 등록할 수 있습니다.");
+      if (file.size>8*1024*1024) throw new Error("예시사진은 장당 8MB 이하로 등록해 주세요.");
+
+      const key=`sticker-compare/examples/${Date.now()}-${crypto.randomUUID()}.${ext(file.type)}`;
+
+      await env.STORAGE.put(key,file.stream(),{
+        httpMetadata:{contentType:file.type,cacheControl:"private,max-age=0"}
+      });
+
+      created.push(key);
+
+      await env.DB.prepare(`
+        INSERT INTO st_examples(
+          sticker_id,sort_order,object_key,content_type,is_guide
+        ) VALUES(?,?,?,?,?)
+      `).bind(stickerId,order,key,file.type,hasGuide?0:1).run();
+
+      hasGuide=true;
+      order++;
+    }
+
+    await env.DB.prepare("DELETE FROM st_analysis_cache WHERE sticker_id=?").bind(stickerId).run();
+    return j({ok:true});
+  } catch (e) {
+    for (const key of created) {
+      try { await env.STORAGE.delete(key); } catch {}
+    }
+    return j({ok:false,error:e.message||"예시사진 등록에 실패했습니다."},400);
+  }
+}
+
+async function updateExampleRoi(request, env, exampleId) {
+  const body=await request.json().catch(()=>({}));
+  const x=Number(body.x),y=Number(body.y),w=Number(body.width),h=Number(body.height);
+
+  if (![x,y,w,h].every(Number.isFinite) || x<0 || y<0 || w<.01 || h<.01 ||
+      x+w>1.0001 || y+h>1.0001) {
+    return j({ok:false,error:"스티커 영역 좌표가 올바르지 않습니다."},400);
+  }
+
+  const ex=await env.DB.prepare("SELECT id,sticker_id FROM st_examples WHERE id=?")
+    .bind(exampleId).first();
+
+  if (!ex) return j({ok:false,error:"예시사진을 찾을 수 없습니다."},404);
+
+  await env.DB.prepare(`
+    UPDATE st_examples
+    SET crop_x=?,crop_y=?,crop_width=?,crop_height=?,updated_at=datetime('now')
+    WHERE id=?
+  `).bind(x,y,w,h,exampleId).run();
+
+  await env.DB.prepare("DELETE FROM st_analysis_cache WHERE sticker_id=?").bind(ex.sticker_id).run();
+
+  return j({ok:true});
+}
+
+async function setGuideExample(env, exampleId) {
+  const ex=await env.DB.prepare("SELECT id,sticker_id FROM st_examples WHERE id=?")
+    .bind(exampleId).first();
+
+  if (!ex) return j({ok:false,error:"예시사진을 찾을 수 없습니다."},404);
+
+  await env.DB.batch([
+    env.DB.prepare("UPDATE st_examples SET is_guide=0 WHERE sticker_id=?").bind(ex.sticker_id),
+    env.DB.prepare("UPDATE st_examples SET is_guide=1,sort_order=1,updated_at=datetime('now') WHERE id=?").bind(exampleId)
+  ]);
+
+  return j({ok:true});
+}
+
+async function deleteExample(env, exampleId) {
+  const ex=await env.DB.prepare(`
+    SELECT id,sticker_id,object_key,is_guide
+    FROM st_examples WHERE id=?
+  `).bind(exampleId).first();
+
+  if (!ex) return j({ok:false,error:"예시사진을 찾을 수 없습니다."},404);
+
+  const count=await env.DB.prepare("SELECT COUNT(*) AS c FROM st_examples WHERE sticker_id=?")
+    .bind(ex.sticker_id).first();
+
+  if (Number(count?.c || 0)<=1) {
+    return j({ok:false,error:"정상부착 예시사진은 최소 1장을 유지해야 합니다."},409);
+  }
+
+  await env.DB.prepare("DELETE FROM st_examples WHERE id=?").bind(exampleId).run();
+
+  if (Number(ex.is_guide)===1) {
+    const next=await env.DB.prepare(`
+      SELECT id FROM st_examples WHERE sticker_id=?
+      ORDER BY sort_order ASC,id ASC LIMIT 1
+    `).bind(ex.sticker_id).first();
+
+    if (next) {
+      await env.DB.prepare("UPDATE st_examples SET is_guide=1,sort_order=1 WHERE id=?")
+        .bind(next.id).run();
+    }
+  }
+
+  const refs=await env.DB.prepare("SELECT COUNT(*) AS c FROM st_examples WHERE object_key=?")
+    .bind(ex.object_key).first();
+
+  if (Number(refs?.c || 0)===0) await env.STORAGE.delete(ex.object_key);
+
+  await env.DB.prepare("DELETE FROM st_analysis_cache WHERE sticker_id=?").bind(ex.sticker_id).run();
+
+  return j({ok:true});
+}
+
+async function getExampleImage(env, id) {
+  const row = await env.DB.prepare(`
+    SELECT object_key,content_type FROM st_examples WHERE id=?
+  `).bind(id).first();
+
+  if (!row) return new Response("Not Found",{status:404});
+
+  const object = await env.STORAGE.get(row.object_key);
+  if (!object) return new Response("Not Found",{status:404});
+
+  const h=new Headers();
+  object.writeHttpMetadata(h);
+  h.set("content-type",row.content_type || "image/jpeg");
+  h.set("cache-control","private,max-age=180");
+
+  return new Response(object.body,{headers:h});
 }
 
 async function getStickerImage(env, id) {
@@ -634,7 +939,7 @@ async function saveInspection(request, env) {
       Number(meta.crop_height)||1,
       meta.sticker_missing ? 1 : 0,
       Math.max(0,Math.min(100,Number(meta.score)||0)),
-      meta.status==="정상" ? "정상" : "확인필요",
+      meta.status==="정상" ? "정상" : (meta.status==="판정불가" ? "판정불가" : "확인필요"),
       JSON.stringify(Array.isArray(meta.findings) ? meta.findings.slice(0,30) : []),
       JSON.stringify(meta.metrics && typeof meta.metrics==="object" ? meta.metrics : {})
     ).first();

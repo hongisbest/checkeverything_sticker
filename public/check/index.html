@@ -13,7 +13,7 @@
   <div>
     <p class="eyebrow">STICKER-BASED INSPECTION · COMPARE SITE</p>
     <h1>홍보스티커 셀프점검</h1>
-    <p class="sub">차종과 차량색상 대신 스티커 자체를 기준으로 비교하는 별도 테스트 사이트입니다.</p>
+    <p class="sub">차종·차량색상과 분리하여 스티커 원본 구조를 기준으로 점검합니다. 정상부착 예시사진은 촬영가이드와 정상상태 보정에 사용됩니다.</p>
   </div>
   <span class="badge">STICKER MODE</span>
 </section>
@@ -32,19 +32,19 @@
 
 <section class="card">
   <div class="section-head">
-    <div><span class="step">STEP 02</span><h2>점검할 스티커 선택</h2></div>
+    <div><span class="step">STEP 02</span><h2>점검할 스티커 / 촬영가이드</h2></div>
     <span id="configStatus" class="badge">불러오는 중</span>
   </div>
 
   <div id="stickerTabs" class="sticker-tabs"></div>
 
   <div class="reference-layout">
-    <div id="referenceBox" class="reference-box">
-      <div class="empty">기준 스티커를 불러오는 중입니다.</div>
+    <div id="referenceBox" class="reference-box guide-example-box">
+      <div class="empty">정상부착 예시사진 1번을 불러오는 중입니다.</div>
     </div>
     <div>
-      <span class="step">NORMAL STICKER</span>
-      <h3 id="stickerTitle">기준 스티커</h3>
+      <span class="step">NORMAL ATTACHMENT GUIDE #1</span>
+      <h3 id="stickerTitle">촬영가이드</h3>
       <div id="sideHintText" class="message info">부착 위치</div>
       <div id="guideText" class="message info">촬영가이드</div>
     </div>
@@ -85,8 +85,8 @@
   </div>
 
   <div class="message info">
-    스티커 위치를 <b>대략 드래그</b>하세요. 실제 분석 시 기준 스티커 비율로 영역을 자동 보정하고 여러 인접 영역의 중앙값을 사용합니다. 기준 스티커와 비슷한 가로·세로 비율로 선택할수록 정확도가 높아집니다.
-    이 단계 때문에 차량 기종과 차체색 영향을 크게 줄일 수 있습니다.
+    정상부착 예시사진 1번을 참고해 <b>실제 스티커가 있는 주변을 대략 드래그</b>하세요.
+    프로그램은 정상 스티커 원본과 정상부착 예시사진의 보정 데이터를 사용해 구조 손상 여부를 계산합니다.
   </div>
 
   <div id="selectionStage" class="selection-stage" style="margin-top:12px">
@@ -118,23 +118,24 @@
       <div id="resultPhoto" class="result-photo"></div>
     </div>
     <div>
-      <span class="step">STABILIZED STICKER AREA</span>
+      <span class="step">NORMALIZED STICKER AREA</span>
       <div id="resultCrop" class="result-crop"></div>
     </div>
   </div>
 
   <div class="analysis-grid">
     <div class="metric"><span>종합점수</span><strong id="scoreValue">-</strong></div>
-    <div class="metric"><span>추정 누락/손상률</span><strong id="damageValue">-</strong></div>
-    <div class="metric"><span>형상 유사도</span><strong id="shapeValue">-</strong></div>
+    <div class="metric"><span>검출신뢰도</span><strong id="confidenceValue">-</strong></div>
+    <div class="metric"><span>구조 손상지수</span><strong id="damageValue">-</strong></div>
+    <div class="metric"><span>구조 보존율</span><strong id="shapeValue">-</strong></div>
     <div class="metric"><span>색상차이</span><strong id="colorValue">-</strong></div>
   </div>
 
   <div id="findings" class="findings"></div>
 
   <div class="message warn">
-    이 비교형 사이트는 차종 독립성을 위해 사용자가 스티커 영역을 직접 지정합니다.
-    손상률은 정상 기준 스티커의 특징영역 소실률을 추정한 값입니다. 자동판정은 1차 스크리닝이며 최종 확인은 관리자가 수행합니다.
+    구조 손상지수는 정상 스티커 원본에서 확인되는 구조 중 정상부착 예시사진에서 안정적으로 보존되는 영역이 실제 점검사진에서 유의미하게 사라진 비율입니다.
+    검출신뢰도가 낮으면 손상으로 억지 판정하지 않고 판정불가로 구분합니다.
   </div>
 
   <button id="submitBtn" class="btn primary full" style="margin-top:14px">점검결과 제출</button>

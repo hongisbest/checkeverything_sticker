@@ -73,3 +73,21 @@ CREATE TABLE IF NOT EXISTS st_analysis_cache (
   PRIMARY KEY (sticker_id, algorithm_version, image_hash)
 );
 
+CREATE TABLE IF NOT EXISTS st_examples (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sticker_id INTEGER NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 1,
+  object_key TEXT NOT NULL,
+  content_type TEXT NOT NULL DEFAULT 'image/jpeg',
+  crop_x REAL,
+  crop_y REAL,
+  crop_width REAL,
+  crop_height REAL,
+  is_guide INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_st_examples_sticker
+ON st_examples(sticker_id, sort_order, id);
+

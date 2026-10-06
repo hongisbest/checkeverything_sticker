@@ -13,7 +13,7 @@
   <div>
     <p class="eyebrow">STICKER-BASED INSPECTION · ADMIN</p>
     <h1>스티커 중심형 관리자</h1>
-    <p class="sub">차량 기준사진 대신 스티커 종류와 원본 이미지를 관리합니다.</p>
+    <p class="sub">스티커 원본을 판정기준으로 사용하고, 정상부착 예시사진은 촬영가이드와 정상상태 보정 데이터로 관리합니다.</p>
   </div>
   <span class="badge">COMPARE SITE</span>
 </section>
@@ -70,15 +70,24 @@
     <textarea id="guideTextInput" placeholder="예: 스티커 전체가 잘리지 않도록 정면에 가깝게 촬영"></textarea>
   </div>
 
-  <div class="form-group" style="margin-top:12px">
-    <label>정상 스티커 이미지</label>
-    <input id="stickerFile" type="file" accept="image/*">
+  <div class="grid-2" style="margin-top:12px">
+    <div class="form-group">
+      <label>정상 스티커 원본 *</label>
+      <input id="stickerFile" type="file" accept="image/*">
+      <p class="help">차량이 없는 스티커 디자인 원본을 권장합니다. 투명 PNG도 그대로 보존합니다.</p>
+    </div>
+    <div class="form-group">
+      <label>정상부착 예시사진 *</label>
+      <input id="exampleFiles" type="file" accept="image/*" multiple>
+      <p class="help">첫 번째 사진은 직원 촬영가이드 1번으로 사용합니다. 여러 차종/색상의 정상사진을 추가해도 됩니다.</p>
+    </div>
   </div>
 
   <div id="stickerPreview" class="preview-box hidden" style="margin-top:10px"></div>
+  <div id="exampleFileInfo" class="message info">정상부착 예시사진을 1장 이상 선택해 주세요.</div>
 
-  <button id="uploadStickerBtn" class="btn primary" style="margin-top:12px">스티커 등록</button>
-  <div id="uploadStickerMessage" class="message info">가능하면 차량사진이 아니라 스티커 원본/정상 스티커만 보이는 이미지를 사용하세요.</div>
+  <button id="uploadStickerBtn" class="btn primary" style="margin-top:12px">스티커 A 데이터 등록</button>
+  <div id="uploadStickerMessage" class="message info">등록 후 정상부착 예시사진에서 실제 스티커 영역을 한 번씩 지정하면 판정 보정 데이터가 완성됩니다.</div>
 </section>
 
 <section class="card">
@@ -103,7 +112,7 @@
 
     <div class="rule-card">
       <div class="rule-head">
-        <div><strong>손상 / 누락률</strong><span>스티커 일부 소실 여부</span></div>
+        <div><strong>구조 손상지수</strong><span>정상부착 예시 대비 사라진 안정 구조영역 비율</span></div>
         <label class="switch-row"><input id="useDamage" type="checkbox"><span>사용</span></label>
       </div>
       <div class="rule-fields">
@@ -120,11 +129,11 @@
 
     <div class="rule-card">
       <div class="rule-head">
-        <div><strong>형상 유사도</strong><span>로고/문구/그래픽 변화</span></div>
+        <div><strong>구조 보존율</strong><span>정상부착 상태에서 보존되어야 하는 로고·문구·그래픽 구조</span></div>
         <label class="switch-row"><input id="useShape" type="checkbox"><span>사용</span></label>
       </div>
       <div class="form-group">
-        <label>최소 유사도 (%)</label>
+        <label>최소 구조 보존율 (%)</label>
         <input id="shapeSimilarityMin" type="number" min="0" max="100">
       </div>
     </div>
@@ -166,6 +175,7 @@
     <div class="dashboard-card"><span>전체</span><strong id="countAll">0</strong></div>
     <div class="dashboard-card"><span>정상</span><strong id="countNormal">0</strong></div>
     <div class="dashboard-card"><span>확인필요</span><strong id="countReview">0</strong></div>
+    <div class="dashboard-card"><span>판정불가</span><strong id="countInvalid">0</strong></div>
     <div class="dashboard-card"><span>개선요청</span><strong id="countAction">0</strong></div>
   </div>
 
@@ -175,6 +185,7 @@
       <option value="">자동판정 전체</option>
       <option>정상</option>
       <option>확인필요</option>
+      <option>판정불가</option>
     </select>
     <select id="stateFilter">
       <option value="">관리상태 전체</option>
@@ -247,6 +258,48 @@
     </div>
 
     <div id="editMessage" class="message info">기존 점검에 사용된 이미지를 바꾸면 과거 원본은 보존하고 새 버전을 만듭니다.</div>
+  </div>
+</div>
+
+
+<!-- normal attachment examples modal -->
+<div id="examplesModal" class="modal hidden">
+  <div class="modal-backdrop" data-close-examples></div>
+  <div class="modal-panel example-manager-panel">
+    <button id="closeExamplesBtn" class="modal-close" type="button">×</button>
+    <span class="step">NORMAL ATTACHMENT EXAMPLES</span>
+    <h2 id="examplesModalTitle">정상부착 예시사진 관리</h2>
+    <p class="help">가이드 1번은 직원 화면에 표시됩니다. 각 사진에서 실제 스티커 부분을 드래그해 캘리브레이션 영역을 지정해 주세요.</p>
+
+    <div class="form-group" style="margin-top:12px">
+      <label>예시사진 추가</label>
+      <input id="addExampleFiles" type="file" accept="image/*" multiple>
+    </div>
+    <button id="addExamplesBtn" class="btn secondary" style="margin-top:8px">선택한 예시사진 추가</button>
+    <div id="examplesMessage" class="message info">영역설정 완료 사진이 1장 이상 있어야 사용자 자동판정이 가능합니다.</div>
+    <div id="examplesList" class="example-list" style="margin-top:12px"></div>
+  </div>
+</div>
+
+<!-- example ROI modal -->
+<div id="exampleRoiModal" class="modal hidden roi-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-panel roi-panel">
+    <button id="closeExampleRoiBtn" class="modal-close" type="button">×</button>
+    <span class="step">CALIBRATION ROI</span>
+    <h2>정상 스티커 영역 지정</h2>
+    <p class="help">차량이나 문손잡이를 제외하고 실제 스티커 전체만 최대한 타이트하게 드래그하세요.</p>
+
+    <div id="exampleRoiStage" class="example-roi-stage">
+      <img id="exampleRoiImage" alt="예시사진">
+      <div id="exampleRoiBox" class="selection-box hidden"></div>
+    </div>
+
+    <div class="modal-actions">
+      <button id="resetExampleRoiBtn" class="btn">다시 그리기</button>
+      <button id="saveExampleRoiBtn" class="btn primary" disabled>스티커 영역 저장</button>
+    </div>
+    <div id="exampleRoiMessage" class="message info">스티커 전체를 드래그해 주세요.</div>
   </div>
 </div>
 

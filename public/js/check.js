@@ -82,10 +82,25 @@ function selectSticker(id){
     b.classList.toggle("active",Number(b.dataset.id)===Number(id));
   });
 
-  $("referenceBox").innerHTML=`<img src="${S.sticker.image_url}?v=${Date.now()}" alt="${esc(S.sticker.name)}">`;
-  $("stickerTitle").textContent=S.sticker.name;
+  const guide=S.sticker.guide_example;
+
+  if(guide){
+    $("referenceBox").innerHTML=`<img src="${guide.image_url}?v=${Date.now()}" alt="정상부착 예시사진 1번">`;
+
+    if(guide.calibrated){
+      const roi=document.createElement("div");
+      roi.className="guide-roi";
+      roi.style.cssText=`left:${Number(guide.crop_x)*100}%;top:${Number(guide.crop_y)*100}%;width:${Number(guide.crop_width)*100}%;height:${Number(guide.crop_height)*100}%`;
+      roi.innerHTML="<span>스티커 위치</span>";
+      $("referenceBox").appendChild(roi);
+    }
+  }else{
+    $("referenceBox").innerHTML='<div class="empty">관리자가 정상부착 예시사진을 등록해야 합니다.</div>';
+  }
+
+  $("stickerTitle").textContent=`${S.sticker.name} · 정상부착 예시사진 1번`;
   $("sideHintText").textContent=`권장 위치: ${sideLabel(S.sticker.side_hint)}`;
-  $("guideText").textContent=S.sticker.guide_text || "스티커가 선명하게 보이도록 촬영해 주세요.";
+  $("guideText").textContent=S.sticker.guide_text || "예시사진과 비슷하게 차량과 스티커가 함께 보이도록 촬영해 주세요.";
 
   resetAllAfterPhoto();
 }
@@ -274,6 +289,21 @@ async function analyzeSelected(){
       return;
     }
 
+    const calibrated=(S.sticker.examples||[]).filter(x=>x.calibrated);
+
+    if(!calibrated.length){
+      S.analysis={
+        score:0,
+        status:"판정불가",
+        recommendation:"",
+        findings:["관리자가 정상부착 예시사진의 스티커 영역을 먼저 설정해야 합니다."],
+        metrics:{damage:0,shape:0,color:0,confidence:0,missing:false}
+      };
+      renderAnalysis(S.analysis);
+      $("analysisSection").scrollIntoView({behavior:"smooth"});
+      return;
+    }
+
     const cached=await getCachedAnalysis();
 
     if(cached){
@@ -289,13 +319,14 @@ async function analyzeSelected(){
       renderAnalysis(S.analysis);
       $("findings").insertAdjacentHTML(
         "afterbegin",
-        '<div class="finding ok">동일 사진의 이전 분석값을 재사용했습니다. 동일 사진은 항상 같은 결과가 적용됩니다.</div>'
+        '<div class="finding ok">동일 사진의 이전 분석결과를 재사용했습니다.</div>'
       );
       $("analysisSection").scrollIntoView({behavior:"smooth"});
       return;
     }
 
-    const result=await analyzeCropStable();
+    const result=await analyzeAgainstMasterAndExamples(calibrated);
+
     S.analysis=result.analysis;
     S.analyzedSelection=result.crop;
 
@@ -308,7 +339,7 @@ async function analyzeSelected(){
   }catch(e){
     console.error(e);
     $("resultStatus").textContent="분석 실패";
-    $("findings").innerHTML='<div class="finding">분석 중 오류가 발생했습니다.</div>';
+    $("findings").innerHTML='<div class="finding">분석 중 오류가 발생했습니다. 스티커 영역을 다시 선택해 주세요.</div>';
   }
 }
 
@@ -321,111 +352,130 @@ function analyzeMissing(){
     recommendation:"교체 권고",
     findings:[
       "스티커가 확인되지 않음",
-      "추정 누락률 100%",
+      "구조 손상지수 100%",
       "교체 권고"
     ],
     metrics:{
       damage:100,
       shape:0,
       color:100,
+      confidence:100,
       missing:true
     }
   };
 }
 
-async function analyzeCropStable(){
-  const reference=await loadImage(S.sticker.image_url);
+async function analyzeAgainstMasterAndExamples(examples){
+  const master=await loadImage(S.sticker.image_url);
+  const masterDescriptor=buildMasterDescriptor(master);
 
-  // 1. Free-form user selection is converted into a reference-ratio box.
+  const normalComparisons=[];
+
+  for(const ex of examples){
+    const img=await loadImage(ex.image_url);
+    const crop=cropImageElement(img,{
+      x:Number(ex.crop_x),
+      y:Number(ex.crop_y),
+      width:Number(ex.crop_width),
+      height:Number(ex.crop_height)
+    },1000);
+
+    const cmp=compareNormalizedStructure(masterDescriptor,crop);
+    normalComparisons.push(cmp);
+  }
+
+  const calibration=buildCalibration(masterDescriptor,normalComparisons);
+
   const base=stabilizeSelection(
     S.selection,
     S.photoImage.naturalWidth,
     S.photoImage.naturalHeight,
-    reference.naturalWidth/reference.naturalHeight
+    master.naturalWidth/Math.max(1,master.naturalHeight)
   );
 
-  // 2. Analyze several tiny perturbations around the same normalized box.
-  //    The median is much less affected by one imperfect drag boundary.
-  const variants=selectionVariants(base);
-  const measurements=[];
+  const candidates=selectionSearchVariants(base);
+  let best=null;
 
-  for(const box of variants){
+  for(const box of candidates){
     const canvas=cropBoxCanvas(S.photoImage,box,1100);
-    const blob=await canvasBlob(canvas,.92);
-    const current=await blobImage(blob);
-    const metrics=compareStickerV3(reference,current);
-    measurements.push({box,metrics});
-  }
+    const cmp=compareNormalizedStructure(masterDescriptor,canvas);
+    const relative=relativeStructureScore(cmp.sims,calibration);
 
-  const damage=median(measurements.map(x=>x.metrics.damage));
-  const shape=median(measurements.map(x=>x.metrics.shape));
-  const color=median(measurements.map(x=>x.metrics.color));
-
-  // Choose the sample closest to the medians as the canonical displayed/stored crop.
-  let chosen=measurements[0];
-  let chosenDistance=Infinity;
-
-  for(const item of measurements){
-    const d=
-      Math.abs(item.metrics.damage-damage)+
-      Math.abs(item.metrics.shape-shape)*.7+
-      Math.abs(item.metrics.color-color)*.2;
-
-    if(d<chosenDistance){
-      chosenDistance=d;
-      chosen=item;
+    if(!best||relative>best.relative){
+      best={box,cmp,relative};
     }
   }
 
+  const damage=calibratedDamageIndex(best.cmp.sims,calibration);
+  const preservation=calibratedPreservation(best.cmp.sims,calibration);
+
+  const baselineGlobal=median(normalComparisons.map(x=>x.global));
+  const confidence=r1(clamp(
+    best.cmp.global/Math.max(.05,baselineGlobal)*100,
+    0,100
+  ));
+
+  const color=calibratedColorDifference(best.cmp.colorVector,normalComparisons);
+
   const metrics={
-    ...chosen.metrics,
     damage:r1(damage),
-    shape:r1(shape),
+    shape:r1(preservation),
     color:r1(color),
-    ensembleCount:measurements.length,
-    cropStabilized:true
+    confidence,
+    baselineGlobal:r1(baselineGlobal*100),
+    stableCells:calibration.stableIndices.length,
+    normalExamples:normalComparisons.length,
+    missing:false
   };
 
   const rules=S.rules||defaultRules();
-
   let status="정상";
   let recommendation="";
   const findings=[];
 
-  if(Number(rules.use_damage)===1){
-    if(metrics.damage>=Number(rules.damage_replace_min)){
+  // Low confidence is NOT damage.
+  if(confidence<62||calibration.stableIndices.length<12){
+    status="판정불가";
+    findings.push("스티커 구조 검출신뢰도가 낮아 손상으로 판정하지 않았습니다. 영역을 다시 지정하거나 예시사진과 비슷한 각도로 재촬영해 주세요.");
+  }else{
+    if(Number(rules.use_damage)===1){
+      if(metrics.damage>=Number(rules.damage_replace_min)){
+        status="확인필요";
+        recommendation="교체 권고";
+        findings.push(`구조 손상지수 ${metrics.damage}% → 교체 권고`);
+      }else if(metrics.damage>Number(rules.damage_normal_max)){
+        status="확인필요";
+        findings.push(`구조 손상지수 ${metrics.damage}% → 확인필요`);
+      }
+    }
+
+    if(Number(rules.use_shape)===1&&metrics.shape<Number(rules.shape_similarity_min)){
       status="확인필요";
-      recommendation="교체 권고";
-      findings.push(`추정 누락/손상률 ${metrics.damage}% → 교체 권고`);
-    }else if(metrics.damage>Number(rules.damage_normal_max)){
+      findings.push(`구조 보존율 ${metrics.shape}% → 로고·문구·그래픽 확인필요`);
+    }
+
+    if(Number(rules.use_color)===1&&metrics.color>Number(rules.color_difference_max)){
       status="확인필요";
-      findings.push(`추정 누락/손상률 ${metrics.damage}% → 확인필요`);
+      findings.push(`정상부착 예시 대비 색상차이 ${metrics.color} → 변색·오염 확인필요`);
+    }
+
+    if(!findings.length){
+      findings.push("정상부착 예시의 정상변동 범위 안에서 스티커 구조가 보존되어 있습니다.");
     }
   }
 
-  if(Number(rules.use_shape)===1&&metrics.shape<Number(rules.shape_similarity_min)){
-    status="확인필요";
-    findings.push(`형상 유사도 ${metrics.shape}% → 로고·문구·그래픽 변화 확인필요`);
-  }
-
-  if(Number(rules.use_color)===1&&metrics.color>Number(rules.color_difference_max)){
-    status="확인필요";
-    findings.push(`주요 색상차이 ${metrics.color} → 변색·오염 확인필요`);
-  }
-
-  if(!findings.length){
-    findings.push("설정된 판정기준에서 뚜렷한 이상징후가 없습니다.");
-  }
-
-  const score=r1(clamp(
-    metrics.shape*.58+
-    (100-metrics.damage)*.37+
-    (100-Math.min(100,metrics.color))*.05,
-    0,100
-  ));
+  const score=status==="판정불가"
+    ? r1(confidence*.5)
+    : r1(clamp(
+        (100-metrics.damage)*.50+
+        metrics.shape*.35+
+        confidence*.10+
+        (100-Math.min(100,metrics.color))*.05,
+        0,100
+      ));
 
   return{
-    crop:chosen.box,
+    crop:best.box,
     analysis:{
       score,
       status,
@@ -434,6 +484,176 @@ async function analyzeCropStable(){
       metrics
     }
   };
+}
+
+function buildMasterDescriptor(img){
+  const W=256,H=128,CELL=8,BINS=9;
+  const canvas=fitImageCanvas(img,W,H);
+  const hog=hogGridFromCanvas(canvas,CELL,BINS);
+
+  const sorted=hog.energy.slice().sort((a,b)=>a-b);
+  const threshold=sorted.length
+    ? sorted[Math.floor(sorted.length*.55)]
+    : 0;
+
+  const informative=hog.energy.map(v=>v>threshold);
+
+  return{
+    canvas,
+    hog,
+    informative,
+    W,H,CELL,BINS
+  };
+}
+
+function compareNormalizedStructure(masterDescriptor,imageOrCanvas){
+  const canvas=imageOrCanvas instanceof HTMLCanvasElement
+    ? fitCanvasToSize(imageOrCanvas,masterDescriptor.W,masterDescriptor.H)
+    : fitImageCanvas(imageOrCanvas,masterDescriptor.W,masterDescriptor.H);
+
+  let best=null;
+
+  const scales=[.92,1,1.08];
+  const shifts=[-8,0,8];
+
+  for(const sx of scales){
+    for(const sy of scales){
+      for(const tx of shifts){
+        for(const ty of shifts){
+          const transformed=transformCanvas(
+            canvas,
+            masterDescriptor.W,
+            masterDescriptor.H,
+            sx,sy,tx,ty
+          );
+
+          const hog=hogGridFromCanvas(
+            transformed,
+            masterDescriptor.CELL,
+            masterDescriptor.BINS
+          );
+
+          const result=hogSimilarity(
+            masterDescriptor.hog,
+            hog,
+            masterDescriptor.informative
+          );
+
+          if(!best||result.weightedMean>best.global){
+            best={
+              sims:Array.from(result.sims),
+              global:result.weightedMean,
+              canvas:transformed,
+              colorVector:dominantChromaticVector(transformed)
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
+function buildCalibration(masterDescriptor,comparisons){
+  const cellCount=masterDescriptor.hog.histograms.length;
+  const baseline=new Float32Array(cellCount);
+  const variability=new Float32Array(cellCount);
+  const stableIndices=[];
+
+  for(let i=0;i<cellCount;i++){
+    if(!masterDescriptor.informative[i])continue;
+
+    const values=comparisons.map(c=>Number(c.sims[i]||0));
+    const med=median(values);
+    const deviations=values.map(v=>Math.abs(v-med));
+
+    baseline[i]=med;
+    variability[i]=median(deviations);
+
+    // Only structure that is actually stable in normal attached examples
+    // becomes a damage-measurement point.
+    if(med>=.52){
+      stableIndices.push(i);
+    }
+  }
+
+  return{
+    baseline,
+    variability,
+    stableIndices,
+    weights:masterDescriptor.hog.energy,
+    meanEnergy:masterDescriptor.hog.informativeMeanEnergy
+  };
+}
+
+function relativeStructureScore(sims,calibration){
+  let sum=0,total=0;
+
+  for(const i of calibration.stableIndices){
+    const base=Math.max(.10,calibration.baseline[i]);
+    const w=calibration.weights[i]/Math.max(.0001,calibration.meanEnergy);
+
+    sum+=clamp(Number(sims[i]||0)/base,0,1)*w;
+    total+=w;
+  }
+
+  return sum/Math.max(.0001,total);
+}
+
+function calibratedDamageIndex(sims,calibration){
+  let lost=0,total=0;
+
+  for(const i of calibration.stableIndices){
+    const base=calibration.baseline[i];
+    const variation=calibration.variability[i];
+
+    // Normal photo-to-photo variation is tolerated.
+    const margin=Math.max(.07,variation*2.5);
+    const w=calibration.weights[i]/Math.max(.0001,calibration.meanEnergy);
+
+    total+=w;
+
+    if(Number(sims[i]||0)<base-margin){
+      lost+=w;
+    }
+  }
+
+  return clamp(lost/Math.max(.0001,total)*100,0,100);
+}
+
+function calibratedPreservation(sims,calibration){
+  let sum=0,total=0;
+
+  for(const i of calibration.stableIndices){
+    const base=Math.max(.10,calibration.baseline[i]);
+    const w=calibration.weights[i]/Math.max(.0001,calibration.meanEnergy);
+
+    sum+=clamp(Number(sims[i]||0)/base,0,1)*w;
+    total+=w;
+  }
+
+  return clamp(sum/Math.max(.0001,total)*100,0,100);
+}
+
+function calibratedColorDifference(userVector,normalComparisons){
+  if(!userVector)return 0;
+
+  const values=[];
+
+  for(const c of normalComparisons){
+    if(!c.colorVector)continue;
+
+    const d=Math.sqrt(
+      (userVector[0]-c.colorVector[0])**2+
+      (userVector[1]-c.colorVector[1])**2+
+      (userVector[2]-c.colorVector[2])**2
+    );
+
+    values.push(clamp(d*175,0,100));
+  }
+
+  return values.length?Math.min(...values):0;
 }
 
 function stabilizeSelection(s,photoW,photoH,referenceAspect){
@@ -447,62 +667,52 @@ function stabilizeSelection(s,photoW,photoH,referenceAspect){
   const cx=px.x+px.width/2;
   const cy=px.y+px.height/2;
 
-  // Expand rather than trim so sticker content is not accidentally clipped.
-  let width=Math.max(px.width,px.height*referenceAspect);
+  // Keep the user selection as a search area but normalize its aspect.
+  let width=px.width;
   let height=width/referenceAspect;
 
-  width*=1.06;
-  height*=1.06;
+  if(height>px.height*1.15){
+    height=px.height;
+    width=height*referenceAspect;
+  }
 
-  width=Math.min(width,photoW);
-  height=Math.min(height,photoH);
-
-  // Quantize to reduce 1~2 px finger/mouse differences.
-  const grid=4;
-  width=Math.max(grid,Math.round(width/grid)*grid);
-  height=Math.max(grid,Math.round(height/grid)*grid);
-
-  let x=Math.round((cx-width/2)/grid)*grid;
-  let y=Math.round((cy-height/2)/grid)*grid;
-
-  x=clamp(x,0,photoW-width);
-  y=clamp(y,0,photoH-height);
+  width=Math.min(photoW,width*1.06);
+  height=Math.min(photoH,height*1.06);
 
   return{
-    x:x/photoW,
-    y:y/photoH,
+    x:clamp((cx-width/2)/photoW,0,1-width/photoW),
+    y:clamp((cy-height/2)/photoH,0,1-height/photoH),
     width:width/photoW,
     height:height/photoH
   };
 }
 
-function selectionVariants(base){
-  const variants=[];
-  const scales=[.96,1,1.04];
-  const shifts=[
+function selectionSearchVariants(base){
+  const out=[];
+
+  const scales=[.90,1,1.10];
+  const offsets=[
     [0,0],
-    [-.012,0],
-    [.012,0],
-    [0,-.012],
-    [0,.012]
+    [-.04,0],
+    [.04,0],
+    [0,-.035],
+    [0,.035]
   ];
 
-  // Keep the total work small: center at 3 scales + four shifted baseline crops.
   for(const scale of scales){
-    variants.push(scaleBox(base,scale,0,0));
+    out.push(scaleBox(base,scale,0,0));
   }
 
-  for(const [dx,dy] of shifts.slice(1)){
-    variants.push(scaleBox(base,1,dx,dy));
+  for(const [dx,dy] of offsets.slice(1)){
+    out.push(scaleBox(base,1,dx,dy));
   }
 
-  return uniqueBoxes(variants);
+  return uniqueBoxes(out);
 }
 
 function scaleBox(box,scale,dx,dy){
   const cx=box.x+box.width/2+dx*box.width;
   const cy=box.y+box.height/2+dy*box.height;
-
   const width=box.width*scale;
   const height=box.height*scale;
 
@@ -531,9 +741,7 @@ function uniqueBoxes(boxes){
   const out=[];
 
   for(const b of boxes){
-    const key=[
-      b.x,b.y,b.width,b.height
-    ].map(v=>v.toFixed(5)).join("|");
+    const key=[b.x,b.y,b.width,b.height].map(v=>v.toFixed(5)).join("|");
 
     if(seen.has(key))continue;
     seen.add(key);
@@ -543,199 +751,8 @@ function uniqueBoxes(boxes){
   return out;
 }
 
-function cropBoxCanvas(img,s,maxSide){
-  const sx=s.x*img.naturalWidth;
-  const sy=s.y*img.naturalHeight;
-  const sw=s.width*img.naturalWidth;
-  const sh=s.height*img.naturalHeight;
-
-  const scale=Math.min(1,maxSide/Math.max(sw,sh));
-
-  const c=document.createElement("canvas");
-  c.width=Math.max(1,Math.round(sw*scale));
-  c.height=Math.max(1,Math.round(sh*scale));
-
-  c.getContext("2d").drawImage(
-    img,sx,sy,sw,sh,
-    0,0,c.width,c.height
-  );
-
-  return c;
-}
-
-function showAnalyzedCrop(box){
-  const canvas=cropBoxCanvas(S.photoImage,box,1100);
-  const url=canvas.toDataURL("image/jpeg",.92);
-  $("resultCrop").innerHTML=`<img src="${url}" alt="자동 보정된 스티커 분석영역">`;
-}
-
-async function getCachedAnalysis(){
-  if(!S.photoHash||!S.sticker)return null;
-
-  try{
-    const q=new URLSearchParams({
-      sticker_id:String(S.sticker.id),
-      algorithm_version:"v4-stable",
-      image_hash:S.photoHash
-    });
-
-    const r=await fetchTimeout(`/api/analysis-cache?${q}`,{cache:"no-store"},10000);
-    const d=await r.json();
-
-    if(!r.ok||!d.hit)return null;
-    return d.result||null;
-  }catch{
-    return null;
-  }
-}
-
-async function saveCachedAnalysis(result){
-  if(!S.photoHash||!S.sticker)return;
-
-  await fetchTimeout("/api/analysis-cache",{
-    method:"POST",
-    headers:{"content-type":"application/json"},
-    body:JSON.stringify({
-      sticker_id:S.sticker.id,
-      algorithm_version:"v4-stable",
-      image_hash:S.photoHash,
-      crop:result.crop,
-      result:result.analysis
-    })
-  },10000);
-}
-
-function visualHash64(img){
-  const c=document.createElement("canvas");
-  c.width=9;
-  c.height=8;
-
-  const ctx=c.getContext("2d",{willReadFrequently:true});
-  ctx.drawImage(img,0,0,9,8);
-
-  const d=ctx.getImageData(0,0,9,8).data;
-  const gray=[];
-
-  for(let i=0;i<d.length;i+=4){
-    gray.push(.299*d[i]+.587*d[i+1]+.114*d[i+2]);
-  }
-
-  let hex="";
-  let nibble=0;
-  let count=0;
-
-  for(let y=0;y<8;y++){
-    for(let x=0;x<8;x++){
-      const bit=gray[y*9+x]>gray[y*9+x+1]?1:0;
-      nibble=(nibble<<1)|bit;
-      count++;
-
-      if(count===4){
-        hex+=nibble.toString(16);
-        nibble=0;
-        count=0;
-      }
-    }
-  }
-
-  return hex;
-}
-
-function median(values){
-  const a=values
-    .filter(Number.isFinite)
-    .slice()
-    .sort((x,y)=>x-y);
-
-  if(!a.length)return 0;
-
-  const m=Math.floor(a.length/2);
-  return a.length%2?a[m]:(a[m-1]+a[m])/2;
-}
-
-function compareStickerV3(reference,current){
-  const W=256;
-  const H=128;
-  const CELL=16;
-  const BINS=9;
-
-  const refCanvas=fitImageCanvas(reference,W,H);
-  const curCanvas=fitImageCanvas(current,W,H);
-
-  const refHog=hogGridFromCanvas(refCanvas,CELL,BINS);
-  const informative=buildInformativeMask(refHog.energy);
-
-  let best=null;
-
-  const scales=[.85,1.0,1.15];
-  const shiftsX=[-24,-12,0,12,24];
-  const shiftsY=[-16,-8,0,8,16];
-
-  for(const sx of scales){
-    for(const sy of scales){
-      for(const tx of shiftsX){
-        for(const ty of shiftsY){
-          const transformed=transformCanvas(curCanvas,W,H,sx,sy,tx,ty);
-          const curHog=hogGridFromCanvas(transformed,CELL,BINS);
-          const result=hogSimilarity(refHog,curHog,informative);
-
-          if(!best||result.weightedMean>best.weightedMean){
-            best={
-              ...result,
-              canvas:transformed,
-              sx,sy,tx,ty
-            };
-          }
-        }
-      }
-    }
-  }
-
-  const shape=r1(clamp(best.weightedMean*100,0,100));
-
-  let lowWeight=0;
-  let totalWeight=0;
-
-  for(let i=0;i<best.sims.length;i++){
-    if(!informative[i])continue;
-
-    const w=refHog.energy[i]/Math.max(.0001,refHog.informativeMeanEnergy);
-    totalWeight+=w;
-
-    if(best.sims[i]<.70){
-      lowWeight+=w;
-    }
-  }
-
-  const lowCoverage=clamp(
-    lowWeight/Math.max(.0001,totalWeight)*100,
-    0,100
-  );
-
-  const structuralDeficit=clamp(
-    (.88-best.weightedMean)/(.88-.55)*100,
-    0,100
-  );
-
-  // Balanced calibration:
-  // normal cross-colour sample stays low;
-  // broad logo/text loss rises into the 30%+ range.
-  const damage=r1(clamp(
-    .75*Math.min(100,lowCoverage*1.30)+
-    .25*structuralDeficit,
-    0,100
-  ));
-
-  const color=r1(compareStickerColor(refCanvas,best.canvas));
-
-  return{
-    damage,
-    shape,
-    color,
-    lowCoverage:r1(lowCoverage),
-    structuralDeficit:r1(structuralDeficit),
-    alignment:`${best.sx.toFixed(2)}×${best.sy.toFixed(2)} / ${best.tx},${best.ty}`
-  };
+function cropImageElement(img,s,maxSide){
+  return cropBoxCanvas(img,s,maxSide);
 }
 
 function fitImageCanvas(img,W,H){
@@ -744,9 +761,25 @@ function fitImageCanvas(img,W,H){
   c.height=H;
 
   const ctx=c.getContext("2d",{willReadFrequently:true});
+  ctx.clearRect(0,0,W,H);
+
+  // Neutral background for transparent master PNGs.
   ctx.fillStyle="#808080";
   ctx.fillRect(0,0,W,H);
   ctx.drawImage(img,0,0,W,H);
+
+  return c;
+}
+
+function fitCanvasToSize(source,W,H){
+  const c=document.createElement("canvas");
+  c.width=W;
+  c.height=H;
+
+  const ctx=c.getContext("2d",{willReadFrequently:true});
+  ctx.fillStyle="#808080";
+  ctx.fillRect(0,0,W,H);
+  ctx.drawImage(source,0,0,W,H);
 
   return c;
 }
@@ -802,7 +835,6 @@ function hogGridFromCanvas(canvas,cell,bins){
 
   const cols=Math.floor(W/cell);
   const rows=Math.floor(H/cell);
-
   const histograms=[];
   const energy=[];
   const binWidth=180/bins;
@@ -844,7 +876,7 @@ function hogGridFromCanvas(canvas,cell,bins){
 
   const sorted=energy.slice().sort((a,b)=>a-b);
   const threshold=sorted.length
-    ? sorted[Math.floor(sorted.length*.50)]
+    ? sorted[Math.floor(sorted.length*.55)]
     : 0;
 
   const informativeEnergies=energy.filter(e=>e>threshold);
@@ -861,20 +893,9 @@ function hogGridFromCanvas(canvas,cell,bins){
   };
 }
 
-function buildInformativeMask(energy){
-  const sorted=energy.slice().sort((a,b)=>a-b);
-  const threshold=sorted.length
-    ? sorted[Math.floor(sorted.length*.50)]
-    : 0;
-
-  return energy.map(v=>v>threshold);
-}
-
 function hogSimilarity(A,B,informative){
   const sims=new Float32Array(A.histograms.length);
-
-  let weighted=0;
-  let totalWeight=0;
+  let weighted=0,totalWeight=0;
 
   for(let i=0;i<A.histograms.length;i++){
     const a=A.histograms[i];
@@ -889,7 +910,6 @@ function hogSimilarity(A,B,informative){
     if(!informative[i])continue;
 
     const w=A.energy[i]/Math.max(.0001,A.informativeMeanEnergy);
-
     weighted+=sim*w;
     totalWeight+=w;
   }
@@ -900,21 +920,6 @@ function hogSimilarity(A,B,informative){
   };
 }
 
-function compareStickerColor(refCanvas,curCanvas){
-  const A=dominantChromaticVector(refCanvas);
-  const B=dominantChromaticVector(curCanvas);
-
-  if(!A||!B)return 0;
-
-  const distance=Math.sqrt(
-    (A[0]-B[0])**2+
-    (A[1]-B[1])**2+
-    (A[2]-B[2])**2
-  );
-
-  return clamp(distance*175,0,100);
-}
-
 function dominantChromaticVector(canvas){
   const ctx=canvas.getContext("2d",{willReadFrequently:true});
   const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data;
@@ -922,17 +927,13 @@ function dominantChromaticVector(canvas){
   let sr=0,sg=0,sb=0,count=0;
 
   for(let i=0;i<rgba.length;i+=4){
-    const r=rgba[i];
-    const g=rgba[i+1];
-    const b=rgba[i+2];
-
+    const r=rgba[i],g=rgba[i+1],b=rgba[i+2];
     const max=Math.max(r,g,b);
     const min=Math.min(r,g,b);
     const saturation=max===0?0:(max-min)/max;
 
     if(saturation>.28&&max>40){
       const sum=r+g+b||1;
-
       sr+=r/sum;
       sg+=g/sum;
       sb+=b/sum;
@@ -942,11 +943,89 @@ function dominantChromaticVector(canvas){
 
   if(count<20)return null;
 
-  return[
-    sr/count,
-    sg/count,
-    sb/count
-  ];
+  return[sr/count,sg/count,sb/count];
+}
+
+function median(values){
+  const a=values.filter(Number.isFinite).slice().sort((x,y)=>x-y);
+
+  if(!a.length)return 0;
+
+  const m=Math.floor(a.length/2);
+  return a.length%2?a[m]:(a[m-1]+a[m])/2;
+}
+
+
+async function getCachedAnalysis(){
+  if(!S.photoHash||!S.sticker)return null;
+
+  try{
+    const q=new URLSearchParams({
+      sticker_id:String(S.sticker.id),
+      algorithm_version:"v5-master-calibrated",
+      image_hash:S.photoHash
+    });
+
+    const r=await fetchTimeout(`/api/analysis-cache?${q}`,{cache:"no-store"},10000);
+    const d=await r.json();
+
+    if(!r.ok||!d.hit)return null;
+    return d.result||null;
+  }catch{
+    return null;
+  }
+}
+
+async function saveCachedAnalysis(result){
+  if(!S.photoHash||!S.sticker)return;
+
+  await fetchTimeout("/api/analysis-cache",{
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body:JSON.stringify({
+      sticker_id:S.sticker.id,
+      algorithm_version:"v5-master-calibrated",
+      image_hash:S.photoHash,
+      crop:result.crop,
+      result:result.analysis
+    })
+  },10000);
+}
+
+function visualHash64(img){
+  const c=document.createElement("canvas");
+  c.width=9;
+  c.height=8;
+
+  const ctx=c.getContext("2d",{willReadFrequently:true});
+  ctx.drawImage(img,0,0,9,8);
+
+  const d=ctx.getImageData(0,0,9,8).data;
+  const gray=[];
+
+  for(let i=0;i<d.length;i+=4){
+    gray.push(.299*d[i]+.587*d[i+1]+.114*d[i+2]);
+  }
+
+  let hex="";
+  let nibble=0;
+  let count=0;
+
+  for(let y=0;y<8;y++){
+    for(let x=0;x<8;x++){
+      const bit=gray[y*9+x]>gray[y*9+x+1]?1:0;
+      nibble=(nibble<<1)|bit;
+      count++;
+
+      if(count===4){
+        hex+=nibble.toString(16);
+        nibble=0;
+        count=0;
+      }
+    }
+  }
+
+  return hex;
 }
 
 function cropSelectedCanvas(img,s,maxSide){
@@ -971,6 +1050,7 @@ function renderAnalysis(a){
   $("resultStatus").className=`badge ${a.status==="정상"?"pill normal":"pill review"}`;
 
   $("scoreValue").textContent=a.score;
+  $("confidenceValue").textContent=`${a.metrics.confidence??0}%`;
   $("damageValue").textContent=`${a.metrics.damage}%`;
   $("shapeValue").textContent=`${a.metrics.shape}%`;
   $("colorValue").textContent=a.metrics.color;
