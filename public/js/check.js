@@ -307,14 +307,13 @@ async function analyzeCrop(){
   $("resultCrop").innerHTML=`<img src="${cropUrl}" alt="선택한 스티커 영역">`;
 
   const current=await blobImage(cropBlob);
-  const metrics=compareStickerV2(reference,current);
+  const metrics=compareStickerV3(reference,current);
   const rules=S.rules||defaultRules();
 
   let status="정상";
   let recommendation="";
   const findings=[];
 
-  // 선택영역이 기준 스티커의 종횡비와 너무 다르면 분석값을 그대로 신뢰하지 않는다.
   const referenceAspect=reference.naturalWidth/Math.max(1,reference.naturalHeight);
   const selectedAspect=
     (S.selection.width*S.photoImage.naturalWidth)/
@@ -323,14 +322,9 @@ async function analyzeCrop(){
   const aspectRatioDelta=Math.max(referenceAspect,selectedAspect)/
     Math.max(.0001,Math.min(referenceAspect,selectedAspect));
 
-  if(aspectRatioDelta>1.45){
+  if(aspectRatioDelta>1.55){
     status="확인필요";
-    findings.push("선택영역 비율이 기준 스티커와 크게 다릅니다. 스티커만 더 타이트하게 다시 지정하는 것을 권장합니다.");
-  }
-
-  if(metrics.featureBlocks<8){
-    status="확인필요";
-    findings.push("비교 가능한 스티커 특징이 충분하지 않습니다. 더 선명한 사진으로 다시 촬영해 주세요.");
+    findings.push("선택영역 비율이 기준 스티커와 크게 다릅니다. 스티커만 더 타이트하게 다시 지정해 주세요.");
   }
 
   if(Number(rules.use_damage)===1){
@@ -351,12 +345,7 @@ async function analyzeCrop(){
 
   if(Number(rules.use_color)===1&&metrics.color>Number(rules.color_difference_max)){
     status="확인필요";
-    findings.push(`스티커 주요 색상차이 ${metrics.color} → 변색·오염 확인필요`);
-  }
-
-  if(metrics.strongMatchCoverage<35&&metrics.damage<Number(rules.damage_replace_min)){
-    status="확인필요";
-    findings.push("기준 특징의 정합률이 낮습니다. 촬영각도 또는 선택영역을 확인해 주세요.");
+    findings.push(`주요 색상차이 ${metrics.color} → 변색·오염 확인필요`);
   }
 
   if(!findings.length){
@@ -364,13 +353,13 @@ async function analyzeCrop(){
   }
 
   let score=r1(clamp(
-    metrics.shape*.55+
-    (100-metrics.damage)*.40+
+    metrics.shape*.58+
+    (100-metrics.damage)*.37+
     (100-Math.min(100,metrics.color))*.05,
     0,100
   ));
 
-  if(aspectRatioDelta>1.45)score=Math.min(score,75);
+  if(aspectRatioDelta>1.55)score=Math.min(score,75);
 
   return{
     score,
@@ -386,524 +375,309 @@ async function analyzeCrop(){
 }
 
 /*
-V2 comparison logic
--------------------
-1. Both images are normalized to the same working canvas.
-2. Reference-image feature blocks are extracted.
-3. Each reference block searches for the best corresponding block.
-4. High-confidence matches estimate a global affine displacement field
-   (translation / small scale / rotation / shear).
-5. Every block is compared again near its predicted aligned position.
-6. Damage is based only on reference feature blocks that disappear in
-   spatially continuous clusters. New tear edges do NOT reduce damage.
-7. Shape similarity is the weighted structural match of the original
-   reference features, not the total number of edges in each photograph.
+V3 BALANCED COMPARISON
+----------------------
+- Vehicle body colour / brightness changes are de-emphasized.
+- HOG-style unsigned edge orientation is used instead of direct pixel brightness.
+- X/Y scale and translation are searched to align the selected sticker area.
+- Only structurally informative reference cells affect the main score.
+- Damage rises when many informative cells become structurally inconsistent.
+- Colour is only a supporting metric.
 */
-function compareStickerV2(reference,current){
-  const W=192,H=96;
-  const A=featureDescriptor(reference,W,H);
-  const B=featureDescriptor(current,W,H);
+function compareStickerV3(reference,current){
+  const W=256;
+  const H=128;
+  const CELL=16;
+  const BINS=9;
 
-  const coarse=coarseFeatureMatches(A,B);
-  const model=fitAffineDisplacement(coarse);
-  const refined=refineFeatureMatches(A,B,coarse,model);
+  const refCanvas=fitImageCanvas(reference,W,H);
+  const curCanvas=fitImageCanvas(current,W,H);
 
-  if(!refined.length){
-    return{
-      damage:100,
-      shape:0,
-      color:100,
-      strongMatchCoverage:0,
-      featureBlocks:0,
-      alignmentInliers:0
-    };
+  const refHog=hogGridFromCanvas(refCanvas,CELL,BINS);
+  const informative=buildInformativeMask(refHog.energy);
+
+  let best=null;
+
+  const scales=[.85,1.0,1.15];
+  const shiftsX=[-24,-12,0,12,24];
+  const shiftsY=[-16,-8,0,8,16];
+
+  for(const sx of scales){
+    for(const sy of scales){
+      for(const tx of shiftsX){
+        for(const ty of shiftsY){
+          const transformed=transformCanvas(curCanvas,W,H,sx,sy,tx,ty);
+          const curHog=hogGridFromCanvas(transformed,CELL,BINS);
+          const result=hogSimilarity(refHog,curHog,informative);
+
+          if(!best||result.weightedMean>best.weightedMean){
+            best={
+              ...result,
+              canvas:transformed,
+              sx,sy,tx,ty
+            };
+          }
+        }
+      }
+    }
   }
 
+  const shape=r1(clamp(best.weightedMean*100,0,100));
+
+  let lowWeight=0;
   let totalWeight=0;
-  let weightedShape=0;
-  let strongWeight=0;
 
-  for(const r of refined){
-    totalWeight+=r.weight;
-    weightedShape+=r.weight*r.score;
-    if(r.score>=.80)strongWeight+=r.weight;
+  for(let i=0;i<best.sims.length;i++){
+    if(!informative[i])continue;
+
+    const w=refHog.energy[i]/Math.max(.0001,refHog.informativeMeanEnergy);
+    totalWeight+=w;
+
+    if(best.sims[i]<.70){
+      lowWeight+=w;
+    }
   }
 
-  const shape=r1(clamp(
-    weightedShape/Math.max(.0001,totalWeight)*100,
+  const lowCoverage=clamp(
+    lowWeight/Math.max(.0001,totalWeight)*100,
+    0,100
+  );
+
+  const structuralDeficit=clamp(
+    (.88-best.weightedMean)/(.88-.55)*100,
+    0,100
+  );
+
+  // Balanced calibration:
+  // normal cross-colour sample stays low;
+  // broad logo/text loss rises into the 30%+ range.
+  const damage=r1(clamp(
+    .75*Math.min(100,lowCoverage*1.30)+
+    .25*structuralDeficit,
     0,100
   ));
 
-  const damage=r1(clusteredReferenceLoss(refined));
-  const color=r1(foregroundColorDifference(A,B));
+  const color=r1(compareStickerColor(refCanvas,best.canvas));
 
   return{
     damage,
     shape,
     color,
-    strongMatchCoverage:r1(strongWeight/Math.max(.0001,totalWeight)*100),
-    featureBlocks:refined.length,
-    alignmentInliers:model.inliers||0
+    lowCoverage:r1(lowCoverage),
+    structuralDeficit:r1(structuralDeficit),
+    alignment:`${best.sx.toFixed(2)}×${best.sy.toFixed(2)} / ${best.tx},${best.ty}`
   };
 }
 
-function featureDescriptor(img,W,H){
+function fitImageCanvas(img,W,H){
   const c=document.createElement("canvas");
   c.width=W;
   c.height=H;
 
   const ctx=c.getContext("2d",{willReadFrequently:true});
+  ctx.fillStyle="#808080";
+  ctx.fillRect(0,0,W,H);
   ctx.drawImage(img,0,0,W,H);
 
+  return c;
+}
+
+function transformCanvas(source,W,H,sx,sy,tx,ty){
+  const c=document.createElement("canvas");
+  c.width=W;
+  c.height=H;
+
+  const ctx=c.getContext("2d",{willReadFrequently:true});
+  ctx.fillStyle="#808080";
+  ctx.fillRect(0,0,W,H);
+
+  ctx.save();
+  ctx.translate(W/2+tx,H/2+ty);
+  ctx.scale(sx,sy);
+  ctx.drawImage(source,-W/2,-H/2,W,H);
+  ctx.restore();
+
+  return c;
+}
+
+function hogGridFromCanvas(canvas,cell,bins){
+  const W=canvas.width;
+  const H=canvas.height;
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
   const rgba=ctx.getImageData(0,0,W,H).data;
+
   const gray=new Float32Array(W*H);
-  const rgb=new Uint8Array(W*H*3);
 
   for(let p=0,i=0;p<W*H;p++,i+=4){
-    const r=rgba[i],g=rgba[i+1],b=rgba[i+2];
-    rgb[p*3]=r;
-    rgb[p*3+1]=g;
-    rgb[p*3+2]=b;
-    gray[p]=.299*r+.587*g+.114*b;
+    gray[p]=.299*rgba[i]+.587*rgba[i+1]+.114*rgba[i+2];
   }
 
-  const bg=estimateBorderColor(rgb,W,H);
-  const mask=new Uint8Array(W*H);
-
-  const saturatedPixels=[];
-  for(let p=0;p<W*H;p++){
-    const r=rgb[p*3],g=rgb[p*3+1],b=rgb[p*3+2];
-    const dr=r-bg[0],dg=g-bg[1],db=b-bg[2];
-    const distance=Math.sqrt(dr*dr+dg*dg+db*db);
-
-    const max=Math.max(r,g,b);
-    const min=Math.min(r,g,b);
-    const sat=max===0?0:(max-min)/max;
-
-    if(distance>45)mask[p]=1;
-
-    // Vehicle body colour is mostly excluded by taking chromatic foreground pixels.
-    if(distance>45&&sat>.18&&max>35){
-      const sum=r+g+b||1;
-      saturatedPixels.push([r/sum,g/sum,b/sum]);
-    }
-  }
-
-  const grad=new Float32Array(W*H);
-  let gradValues=[];
+  const mag=new Float32Array(W*H);
+  const ang=new Float32Array(W*H);
 
   for(let y=1;y<H-1;y++){
     for(let x=1;x<W-1;x++){
       const p=y*W+x;
-      const gx=(gray[p+1]-gray[p-1])*.5;
-      const gy=(gray[p+W]-gray[p-W])*.5;
-      const value=Math.sqrt(gx*gx+gy*gy);
-      grad[p]=value;
-      gradValues.push(value);
+      const dx=(gray[p+1]-gray[p-1])*.5;
+      const dy=(gray[p+W]-gray[p-W])*.5;
+
+      mag[p]=Math.sqrt(dx*dx+dy*dy);
+
+      let a=Math.atan2(dy,dx)*180/Math.PI;
+      if(a<0)a+=180;
+      if(a>=180)a-=180;
+
+      ang[p]=a;
     }
   }
 
-  const scale=percentile(gradValues,.95)||1;
-  for(let p=0;p<grad.length;p++){
-    grad[p]=clamp(grad[p]/scale,0,1);
-  }
+  const cols=Math.floor(W/cell);
+  const rows=Math.floor(H/cell);
 
-  let colorVector=null;
-  if(saturatedPixels.length>=10){
-    let r=0,g=0,b=0;
-    for(const v of saturatedPixels){
-      r+=v[0];g+=v[1];b+=v[2];
-    }
-    colorVector=[
-      r/saturatedPixels.length,
-      g/saturatedPixels.length,
-      b/saturatedPixels.length
-    ];
-  }
+  const histograms=[];
+  const energy=[];
+  const binWidth=180/bins;
 
-  return{W,H,gray,grad,mask,bg,colorVector};
-}
+  for(let cy=0;cy<rows;cy++){
+    for(let cx=0;cx<cols;cx++){
+      const hist=new Float32Array(bins);
+      let e=0;
 
-function estimateBorderColor(rgb,W,H){
-  const rs=[],gs=[],bs=[];
-  const band=4;
+      for(let yy=0;yy<cell;yy++){
+        for(let xx=0;xx<cell;xx++){
+          const x=cx*cell+xx;
+          const y=cy*cell+yy;
+          const p=y*W+x;
 
-  function add(x,y){
-    const p=(y*W+x)*3;
-    rs.push(rgb[p]);
-    gs.push(rgb[p+1]);
-    bs.push(rgb[p+2]);
-  }
+          const m=mag[p];
+          let bin=Math.floor(ang[p]/binWidth);
 
-  for(let y=0;y<H;y++){
-    for(let x=0;x<W;x++){
-      if(x<band||x>=W-band||y<band||y>=H-band)add(x,y);
-    }
-  }
+          if(bin<0)bin=0;
+          if(bin>=bins)bin=bins-1;
 
-  return[median(rs),median(gs),median(bs)];
-}
-
-function coarseFeatureMatches(A,B){
-  const patch=12;
-  const stride=8;
-  const search=10;
-  const records=[];
-
-  for(let y=0;y<=A.H-patch;y+=stride){
-    for(let x=0;x<=A.W-patch;x+=stride){
-      const info=referencePatchInformation(A,x,y,patch);
-
-      if(info.foregroundFraction<.08&&info.edgeMean<.12)continue;
-
-      const weight=clamp(
-        .25+info.foregroundFraction*2.5+info.edgeMean*1.25,
-        .25,3
-      );
-
-      let bestScore=-1;
-      let bestDx=0,bestDy=0;
-
-      for(let dy=-search;dy<=search;dy+=2){
-        const yy=y+dy;
-        if(yy<0||yy+patch>A.H)continue;
-
-        for(let dx=-search;dx<=search;dx+=2){
-          const xx=x+dx;
-          if(xx<0||xx+patch>A.W)continue;
-
-          const score=structuralPatchScore(A,B,x,y,xx,yy,patch);
-
-          if(score>bestScore){
-            bestScore=score;
-            bestDx=dx;
-            bestDy=dy;
-          }
+          hist[bin]+=m;
+          e+=m;
         }
       }
 
-      records.push({
-        x,y,weight,
-        score:Math.max(0,bestScore),
-        dx:bestDx,
-        dy:bestDy,
-        stride
-      });
+      let norm=0;
+      for(let i=0;i<bins;i++)norm+=hist[i]*hist[i];
+      norm=Math.sqrt(norm);
+
+      if(norm>.000001){
+        for(let i=0;i<bins;i++)hist[i]/=norm;
+      }
+
+      histograms.push(hist);
+      energy.push(e);
     }
   }
 
-  return records;
+  const sorted=energy.slice().sort((a,b)=>a-b);
+  const threshold=sorted.length
+    ? sorted[Math.floor(sorted.length*.50)]
+    : 0;
+
+  const informativeEnergies=energy.filter(e=>e>threshold);
+  const informativeMeanEnergy=informativeEnergies.length
+    ? informativeEnergies.reduce((a,b)=>a+b,0)/informativeEnergies.length
+    : 1;
+
+  return{
+    histograms,
+    energy,
+    rows,
+    cols,
+    informativeMeanEnergy
+  };
 }
 
-function referencePatchInformation(A,x,y,patch){
-  let fg=0;
-  let edge=0;
-  let count=0;
+function buildInformativeMask(energy){
+  const sorted=energy.slice().sort((a,b)=>a-b);
+  const threshold=sorted.length
+    ? sorted[Math.floor(sorted.length*.50)]
+    : 0;
 
-  for(let yy=0;yy<patch;yy++){
-    for(let xx=0;xx<patch;xx++){
-      const p=(y+yy)*A.W+(x+xx);
-      fg+=A.mask[p];
-      edge+=A.grad[p];
+  return energy.map(v=>v>threshold);
+}
+
+function hogSimilarity(A,B,informative){
+  const sims=new Float32Array(A.histograms.length);
+
+  let weighted=0;
+  let totalWeight=0;
+
+  for(let i=0;i<A.histograms.length;i++){
+    const a=A.histograms[i];
+    const b=B.histograms[i];
+
+    let dot=0;
+    for(let k=0;k<a.length;k++)dot+=a[k]*b[k];
+
+    const sim=clamp(dot,0,1);
+    sims[i]=sim;
+
+    if(!informative[i])continue;
+
+    const w=A.energy[i]/Math.max(.0001,A.informativeMeanEnergy);
+
+    weighted+=sim*w;
+    totalWeight+=w;
+  }
+
+  return{
+    sims,
+    weightedMean:weighted/Math.max(.0001,totalWeight)
+  };
+}
+
+function compareStickerColor(refCanvas,curCanvas){
+  const A=dominantChromaticVector(refCanvas);
+  const B=dominantChromaticVector(curCanvas);
+
+  if(!A||!B)return 0;
+
+  const distance=Math.sqrt(
+    (A[0]-B[0])**2+
+    (A[1]-B[1])**2+
+    (A[2]-B[2])**2
+  );
+
+  return clamp(distance*175,0,100);
+}
+
+function dominantChromaticVector(canvas){
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
+  const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+
+  let sr=0,sg=0,sb=0,count=0;
+
+  for(let i=0;i<rgba.length;i+=4){
+    const r=rgba[i];
+    const g=rgba[i+1];
+    const b=rgba[i+2];
+
+    const max=Math.max(r,g,b);
+    const min=Math.min(r,g,b);
+    const saturation=max===0?0:(max-min)/max;
+
+    if(saturation>.28&&max>40){
+      const sum=r+g+b||1;
+
+      sr+=r/sum;
+      sg+=g/sum;
+      sb+=b/sum;
       count++;
     }
   }
 
-  return{
-    foregroundFraction:fg/Math.max(1,count),
-    edgeMean:edge/Math.max(1,count)
-  };
-}
+  if(count<20)return null;
 
-function structuralPatchScore(A,B,ax,ay,bx,by,patch){
-  let n=0;
-
-  let sa=0,sb=0,saa=0,sbb=0,sab=0;
-  let ga=0,gb=0,gaa=0,gbb=0,gab=0;
-
-  for(let yy=0;yy<patch;yy++){
-    for(let xx=0;xx<patch;xx++){
-      const pa=(ay+yy)*A.W+(ax+xx);
-      const pb=(by+yy)*B.W+(bx+xx);
-
-      // Focus the comparison on reference features and their immediate structure.
-      if(A.mask[pa]===0&&A.grad[pa]<.10)continue;
-
-      const a=A.gray[pa];
-      const b=B.gray[pb];
-      const ag=A.grad[pa];
-      const bg=B.grad[pb];
-
-      sa+=a;sb+=b;
-      saa+=a*a;sbb+=b*b;sab+=a*b;
-
-      ga+=ag;gb+=bg;
-      gaa+=ag*ag;gbb+=bg*bg;gab+=ag*bg;
-
-      n++;
-    }
-  }
-
-  if(n<16)return 0;
-
-  const grayCorr=Math.abs(correlationFromSums(n,sa,sb,saa,sbb,sab));
-  const gradCorr=Math.max(0,correlationFromSums(n,ga,gb,gaa,gbb,gab));
-
-  const varA=Math.max(0,saa/n-(sa/n)*(sa/n));
-  const varB=Math.max(0,sbb/n-(sb/n)*(sb/n));
-  const sdA=Math.sqrt(varA);
-  const sdB=Math.sqrt(varB);
-
-  const textureEnergy=
-    sdA<1||sdB<1
-      ? 0
-      : Math.min(sdA/sdB,sdB/sdA);
-
-  return clamp(
-    grayCorr*.62+
-    gradCorr*.25+
-    textureEnergy*.13,
-    0,1
-  );
-}
-
-function correlationFromSums(n,sa,sb,saa,sbb,sab){
-  const numerator=n*sab-sa*sb;
-  const da=n*saa-sa*sa;
-  const db=n*sbb-sb*sb;
-
-  if(da<=1e-8||db<=1e-8)return 0;
-
-  return clamp(
-    numerator/Math.sqrt(da*db),
-    -1,1
-  );
-}
-
-function fitAffineDisplacement(records){
-  let selected=records.filter(r=>r.score>=.78);
-
-  // Severe damage may leave fewer high-confidence blocks.
-  if(selected.length<8){
-    selected=records
-      .slice()
-      .sort((a,b)=>b.score-a.score)
-      .slice(0,Math.min(30,records.length));
-  }
-
-  if(selected.length<4){
-    return{dx:[0,0,0],dy:[0,0,0],inliers:0};
-  }
-
-  let model=weightedAffineFit(selected);
-
-  // Robust second pass: discard displacement outliers.
-  let inliers=selected.filter(r=>{
-    const pdx=model.dx[0]+model.dx[1]*r.x+model.dx[2]*r.y;
-    const pdy=model.dy[0]+model.dy[1]*r.x+model.dy[2]*r.y;
-    const residual=Math.hypot(pdx-r.dx,pdy-r.dy);
-    return residual<=4.5;
-  });
-
-  if(inliers.length>=4){
-    model=weightedAffineFit(inliers);
-  }else{
-    inliers=selected;
-  }
-
-  return{...model,inliers:inliers.length};
-}
-
-function weightedAffineFit(records){
-  const M=[
-    [0,0,0],
-    [0,0,0],
-    [0,0,0]
+  return[
+    sr/count,
+    sg/count,
+    sb/count
   ];
-
-  const vx=[0,0,0];
-  const vy=[0,0,0];
-
-  for(const r of records){
-    const z=[1,r.x,r.y];
-    const w=r.weight*Math.max(.15,r.score);
-
-    for(let i=0;i<3;i++){
-      vx[i]+=w*z[i]*r.dx;
-      vy[i]+=w*z[i]*r.dy;
-
-      for(let j=0;j<3;j++){
-        M[i][j]+=w*z[i]*z[j];
-      }
-    }
-  }
-
-  for(let i=0;i<3;i++)M[i][i]+=1e-6;
-
-  return{
-    dx:solve3(M,vx),
-    dy:solve3(M,vy)
-  };
-}
-
-function solve3(matrix,vector){
-  const a=matrix.map((row,i)=>[...row,vector[i]]);
-
-  for(let col=0;col<3;col++){
-    let pivot=col;
-
-    for(let row=col+1;row<3;row++){
-      if(Math.abs(a[row][col])>Math.abs(a[pivot][col]))pivot=row;
-    }
-
-    if(Math.abs(a[pivot][col])<1e-10)return[0,0,0];
-
-    [a[col],a[pivot]]=[a[pivot],a[col]];
-
-    const div=a[col][col];
-    for(let j=col;j<4;j++)a[col][j]/=div;
-
-    for(let row=0;row<3;row++){
-      if(row===col)continue;
-
-      const factor=a[row][col];
-      for(let j=col;j<4;j++){
-        a[row][j]-=factor*a[col][j];
-      }
-    }
-  }
-
-  return[a[0][3],a[1][3],a[2][3]];
-}
-
-function refineFeatureMatches(A,B,records,model){
-  const patch=12;
-  const local=3;
-  const refined=[];
-
-  for(const r of records){
-    const pdx=model.dx[0]+model.dx[1]*r.x+model.dx[2]*r.y;
-    const pdy=model.dy[0]+model.dy[1]*r.x+model.dy[2]*r.y;
-
-    let best=0;
-
-    for(let ddy=-local;ddy<=local;ddy++){
-      const yy=Math.round(r.y+pdy+ddy);
-      if(yy<0||yy+patch>B.H)continue;
-
-      for(let ddx=-local;ddx<=local;ddx++){
-        const xx=Math.round(r.x+pdx+ddx);
-        if(xx<0||xx+patch>B.W)continue;
-
-        const score=structuralPatchScore(
-          A,B,
-          r.x,r.y,
-          xx,yy,
-          patch
-        );
-
-        if(score>best)best=score;
-      }
-    }
-
-    refined.push({
-      x:r.x,
-      y:r.y,
-      weight:r.weight,
-      score:best,
-      stride:r.stride
-    });
-  }
-
-  return refined;
-}
-
-function clusteredReferenceLoss(records){
-  const weakThreshold=.80;
-  const veryWeakThreshold=.58;
-
-  const map=new Map();
-
-  for(const r of records){
-    map.set(`${r.x},${r.y}`,r);
-  }
-
-  let total=0;
-  let lost=0;
-
-  for(const r of records){
-    total+=r.weight;
-
-    if(r.score>=weakThreshold)continue;
-
-    let contribution=0;
-
-    if(r.score<veryWeakThreshold){
-      contribution=1;
-    }else{
-      let weakNeighbours=0;
-      const s=r.stride;
-
-      for(const dy of[-s,0,s]){
-        for(const dx of[-s,0,s]){
-          if(dx===0&&dy===0)continue;
-
-          const n=map.get(`${r.x+dx},${r.y+dy}`);
-
-          if(n&&n.score<weakThreshold){
-            weakNeighbours++;
-          }
-        }
-      }
-
-      // Continuous damaged regions count fully.
-      // Isolated mismatches are mostly caused by angle / reflection / crop noise.
-      contribution=weakNeighbours>=2?1:.20;
-    }
-
-    lost+=r.weight*contribution;
-  }
-
-  return clamp(
-    lost/Math.max(.0001,total)*100,
-    0,100
-  );
-}
-
-function foregroundColorDifference(A,B){
-  if(!A.colorVector||!B.colorVector)return 0;
-
-  const a=A.colorVector;
-  const b=B.colorVector;
-
-  const distance=Math.sqrt(
-    (a[0]-b[0])**2+
-    (a[1]-b[1])**2+
-    (a[2]-b[2])**2
-  );
-
-  return clamp(distance*180,0,100);
-}
-
-function percentile(values,q){
-  if(!values.length)return 0;
-
-  const a=values.slice().sort((x,y)=>x-y);
-  const pos=(a.length-1)*q;
-  const lo=Math.floor(pos);
-  const hi=Math.ceil(pos);
-
-  if(lo===hi)return a[lo];
-
-  const t=pos-lo;
-  return a[lo]*(1-t)+a[hi]*t;
-}
-
-function median(values){
-  if(!values.length)return 0;
-  const a=values.slice().sort((x,y)=>x-y);
-  const mid=Math.floor(a.length/2);
-  return a.length%2?a[mid]:(a[mid-1]+a[mid])/2;
 }
 
 function cropSelectedCanvas(img,s,maxSide){

@@ -1,0 +1,15 @@
+V3 BALANCED REGRESSION
+
+Normal app screenshot:
+shape similarity = 90.1%
+estimated damage = 5.1%
+alignment = (1.0, 1.0, 12, 16)
+low structural coverage = 5.3%
+
+Damaged app screenshot:
+shape similarity = 79.0%
+estimated damage = 34.1%
+alignment = (0.85, 1.15, 12, 16)
+low structural coverage = 27.9%
+
+PASS
