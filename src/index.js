@@ -179,6 +179,7 @@ async function api(request, env, url) {
 
   // Results
   if (p === "/api/admin/inspections" && request.method === "GET") return listInspections(env, url);
+  if (p === "/api/admin/inspections/bulk-delete" && request.method === "POST") return bulkDeleteInspections(request, env);
   if (p === "/api/admin/export.csv" && request.method === "GET") return exportCsv(env);
 
   const inspectionImage = p.match(/^\/api\/admin\/inspections\/(\d+)\/image$/);
@@ -991,6 +992,70 @@ async function listInspections(env, url) {
   const r = await env.DB.prepare(sql).bind(...bind).all();
 
   return j({ok:true,items:r.results || []});
+}
+
+
+async function bulkDeleteInspections(request, env) {
+  const body = await request.json().catch(()=>({}));
+  const rawIds = Array.isArray(body.ids) ? body.ids : [];
+
+  const ids = [...new Set(
+    rawIds
+      .map(Number)
+      .filter(x=>Number.isInteger(x) && x>0)
+  )];
+
+  if (!ids.length) {
+    return j({ok:false,error:"삭제할 점검결과를 선택해 주세요."},400);
+  }
+
+  if (ids.length > 500) {
+    return j({ok:false,error:"한 번에 최대 500건까지 삭제할 수 있습니다."},400);
+  }
+
+  const placeholders = ids.map(()=>"?").join(",");
+
+  const rows = await env.DB.prepare(`
+    SELECT id,photo_object_key
+    FROM st_inspections
+    WHERE id IN (${placeholders})
+  `).bind(...ids).all();
+
+  const found = rows.results || [];
+
+  if (!found.length) {
+    return j({ok:false,error:"삭제할 점검결과를 찾을 수 없습니다."},404);
+  }
+
+  // Delete DB records first in a single D1 statement.
+  // If an R2 object cleanup fails afterwards, the user-visible inspection
+  // record is still removed and orphan cleanup can be retried later.
+  await env.DB.prepare(`
+    DELETE FROM st_inspections
+    WHERE id IN (${placeholders})
+  `).bind(...ids).run();
+
+  let deletedImages=0;
+  let imageDeleteFailed=0;
+
+  for (const row of found) {
+    if (!row.photo_object_key) continue;
+
+    try {
+      await env.STORAGE.delete(row.photo_object_key);
+      deletedImages++;
+    } catch (e) {
+      console.error("inspection image delete failed", row.id, row.photo_object_key, e);
+      imageDeleteFailed++;
+    }
+  }
+
+  return j({
+    ok:true,
+    deleted:found.length,
+    deleted_images:deletedImages,
+    image_delete_failed:imageDeleteFailed
+  });
 }
 
 async function getInspectionImage(env, id) {

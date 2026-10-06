@@ -168,7 +168,10 @@
 
   <div class="section-head">
     <div><span class="step">DASHBOARD</span><h2>점검결과</h2></div>
-    <a class="btn secondary small" href="/api/admin/export.csv">CSV 다운로드</a>
+    <div class="result-top-actions">
+      <a class="btn secondary small" href="/api/admin/export.csv">CSV 다운로드</a>
+      <button id="deleteSelectedBtn" class="btn danger small" type="button" disabled>선택 삭제 (0)</button>
+    </div>
   </div>
 
   <div class="dashboard-cards">
@@ -177,6 +180,14 @@
     <div class="dashboard-card"><span>확인필요</span><strong id="countReview">0</strong></div>
     <div class="dashboard-card"><span>판정불가</span><strong id="countInvalid">0</strong></div>
     <div class="dashboard-card"><span>개선요청</span><strong id="countAction">0</strong></div>
+  </div>
+
+  <div class="bulk-select-bar">
+    <label class="bulk-select-label">
+      <input id="selectAllInspections" type="checkbox">
+      <span>현재 조회결과 전체선택</span>
+    </label>
+    <span id="selectedCountText" class="muted">선택 0건</span>
   </div>
 
   <div class="filter-row">

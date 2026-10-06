@@ -110,3 +110,14 @@ Backend / D1 / R2 / Admin / schema / wrangler는 변경하지 않았습니다.
 - 기존 관리자 로그인 / 결과관리 / CSV / 사진확대 유지
 
 - 분석 캐시 알고리즘 버전: `v5-master-calibrated`
+
+
+## V6 점검결과 선택삭제 검증
+- 기존 schema 변경 없음
+- 점검결과 선택 삭제 API만 추가
+- 선택된 st_inspections 행만 DELETE
+- 선택된 점검결과의 R2 photo_object_key만 삭제
+- st_stickers / st_examples / st_rules / st_analysis_cache 삭제 없음
+- 현재 조회결과 전체선택만 지원하여 필터 밖 데이터 오삭제 방지
+- 최대 500건 단위 삭제 제한
+- 삭제 전 브라우저 확인창 필수

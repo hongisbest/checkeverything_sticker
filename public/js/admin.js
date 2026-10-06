@@ -6,7 +6,9 @@ const S={
   roiExampleId:null,
   roiDrawing:false,
   roiStart:null,
-  roiDraft:null
+  roiDraft:null,
+  inspectionItems:[],
+  selectedInspectionIds:new Set()
 };
 
 document.addEventListener("DOMContentLoaded",()=>{
@@ -45,6 +47,8 @@ function bind(){
     .forEach(id=>$(id).addEventListener("input",updateRuleSummary));
 
   $("searchBtn").onclick=loadInspections;
+  $("selectAllInspections").onchange=toggleSelectAllInspections;
+  $("deleteSelectedBtn").onclick=deleteSelectedInspections;
 
   document.querySelectorAll("[data-view]").forEach(b=>{
     b.onclick=()=>switchView(b.dataset.view);
@@ -749,6 +753,7 @@ async function saveRules(){
 
 async function loadInspections(){
   $("inspectionList").innerHTML='<div class="empty">불러오는 중...</div>';
+  clearInspectionSelection();
 
   const q=new URLSearchParams();
 
@@ -763,6 +768,7 @@ async function loadInspections(){
     if(!r.ok)throw new Error(d.error||"조회 실패");
 
     const items=d.items||[];
+    S.inspectionItems=items;
 
     $("countAll").textContent=items.length;
     $("countNormal").textContent=items.filter(x=>x.status==="정상").length;
@@ -779,7 +785,17 @@ async function loadInspections(){
           try{metrics=JSON.parse(x.metrics_json||"{}")}catch{}
 
           return`
-            <div class="inspection-row">
+            <div class="inspection-row" data-inspection-id="${x.id}">
+              <div class="inspection-select-cell">
+                <input
+                  class="inspection-checkbox"
+                  type="checkbox"
+                  value="${x.id}"
+                  aria-label="점검결과 ${x.id} 선택"
+                  onchange="toggleInspectionSelection(${x.id},this.checked)"
+                >
+              </div>
+
               <div class="inspection-main">
                 <img
                   src="/api/admin/inspections/${x.id}/image"
@@ -811,8 +827,121 @@ async function loadInspections(){
         }).join("")
       : '<div class="empty">점검결과가 없습니다.</div>';
 
+    updateInspectionSelectionUI();
+
   }catch(e){
+    S.inspectionItems=[];
+    clearInspectionSelection();
     $("inspectionList").innerHTML=`<div class="message error">${esc(e.message)}</div>`;
+  }
+}
+
+window.toggleInspectionSelection=function(id,checked){
+  const n=Number(id);
+
+  if(checked){
+    S.selectedInspectionIds.add(n);
+  }else{
+    S.selectedInspectionIds.delete(n);
+  }
+
+  updateInspectionSelectionUI();
+};
+
+function toggleSelectAllInspections(){
+  const checked=$("selectAllInspections").checked;
+  const ids=S.inspectionItems.map(x=>Number(x.id));
+
+  if(checked){
+    ids.forEach(id=>S.selectedInspectionIds.add(id));
+  }else{
+    ids.forEach(id=>S.selectedInspectionIds.delete(id));
+  }
+
+  document.querySelectorAll(".inspection-checkbox").forEach(cb=>{
+    cb.checked=checked;
+  });
+
+  updateInspectionSelectionUI();
+}
+
+function clearInspectionSelection(){
+  S.selectedInspectionIds.clear();
+
+  if($("selectAllInspections")){
+    $("selectAllInspections").checked=false;
+    $("selectAllInspections").indeterminate=false;
+  }
+
+  updateInspectionSelectionUI();
+}
+
+function updateInspectionSelectionUI(){
+  const selectedCount=S.selectedInspectionIds.size;
+  const total=S.inspectionItems.length;
+
+  $("selectedCountText").textContent=`선택 ${selectedCount}건`;
+  $("deleteSelectedBtn").textContent=`선택 삭제 (${selectedCount})`;
+  $("deleteSelectedBtn").disabled=selectedCount===0;
+
+  const selectAll=$("selectAllInspections");
+
+  if(total===0){
+    selectAll.checked=false;
+    selectAll.indeterminate=false;
+    selectAll.disabled=true;
+  }else{
+    selectAll.disabled=false;
+    selectAll.checked=selectedCount===total;
+    selectAll.indeterminate=selectedCount>0&&selectedCount<total;
+  }
+
+  document.querySelectorAll(".inspection-checkbox").forEach(cb=>{
+    cb.checked=S.selectedInspectionIds.has(Number(cb.value));
+  });
+}
+
+async function deleteSelectedInspections(){
+  const ids=[...S.selectedInspectionIds];
+
+  if(!ids.length){
+    alert("삭제할 점검결과를 먼저 선택해 주세요.");
+    return;
+  }
+
+  const confirmed=confirm(
+    `선택한 ${ids.length}건의 점검결과와 업로드 사진이 함께 삭제됩니다.\n\n`+
+    `삭제 후에는 복구할 수 없습니다.\n정말 삭제하시겠습니까?`
+  );
+
+  if(!confirmed)return;
+
+  $("deleteSelectedBtn").disabled=true;
+  $("deleteSelectedBtn").textContent="삭제 중...";
+
+  try{
+    const r=await fetchTimeout("/api/admin/inspections/bulk-delete",{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({ids})
+    },30000);
+
+    const d=await r.json();
+
+    if(!r.ok)throw new Error(d.error||"삭제 실패");
+
+    let text=`${Number(d.deleted||0)}건을 삭제했습니다.`;
+
+    if(Number(d.image_delete_failed||0)>0){
+      text+=`\n점검기록은 삭제되었지만 사진 ${d.image_delete_failed}건의 저장소 정리에 실패했습니다.`;
+    }
+
+    alert(text);
+    await loadInspections();
+
+  }catch(e){
+    alert(`삭제하지 못했습니다.\n${e.message}`);
+    updateInspectionSelectionUI();
   }
 }
 

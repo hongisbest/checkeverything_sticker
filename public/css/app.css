@@ -226,3 +226,66 @@ body.modal-open{overflow:hidden}
   .example-row{grid-template-columns:90px 1fr}
   .example-row img{width:90px}
 }
+/* ===== V6 admin inspection bulk data management ===== */
+.result-top-actions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+.bulk-select-bar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:10px 12px;
+  margin-bottom:10px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#fafbfc;
+}
+.bulk-select-label{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:12px;
+  font-weight:800;
+  cursor:pointer;
+}
+.bulk-select-label input,
+.inspection-checkbox{
+  width:18px;
+  height:18px;
+  accent-color:var(--navy);
+  cursor:pointer;
+}
+.inspection-row{
+  grid-template-columns:34px minmax(0,1fr) 180px;
+}
+.inspection-select-cell{
+  display:flex;
+  align-items:flex-start;
+  justify-content:center;
+  padding-top:7px;
+}
+@media(max-width:850px){
+  .inspection-row{
+    grid-template-columns:34px minmax(0,1fr);
+  }
+  .inspection-row .detail-actions{
+    grid-column:2;
+  }
+}
+@media(max-width:600px){
+  .result-top-actions{
+    width:100%;
+    justify-content:stretch;
+  }
+  .result-top-actions .btn{
+    flex:1;
+  }
+  .bulk-select-bar{
+    align-items:flex-start;
+  }
+}
