@@ -1,0 +1,6 @@
+V2 image-comparison regression
+
+Identical normal: shape=100.0%, damage=0.0%
+Brightness-changed normal: shape=95.4%, damage=0.0%
+Damaged paired sample: shape=74.8%, damage=42.2%
+Damaged sample feature blocks=185, alignment inliers=66
