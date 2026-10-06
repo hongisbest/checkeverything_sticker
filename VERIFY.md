@@ -73,3 +73,13 @@
 - 훼손 형상유사도는 정상보다 8%p 이상 낮음
 
 Backend / D1 / R2 / Admin / schema / wrangler는 변경하지 않았습니다.
+
+
+## V4 동일사진 재현성 검증
+- 신규 st_analysis_cache 테이블만 추가
+- 기존 st_* 테이블 DROP/TRUNCATE/초기화 없음
+- 기존 R2 경로/사진 삭제 없음
+- 동일 사진은 64-bit perceptual dHash + sticker_id + algorithm_version 조합으로 재사용
+- 분석 crop은 기준 스티커 비율로 자동 보정
+- 7개 crop ensemble 중앙값 적용
+- 제출 시 사용자가 그린 raw crop 대신 실제 분석 crop 좌표 저장

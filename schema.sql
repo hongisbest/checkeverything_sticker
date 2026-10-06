@@ -55,3 +55,21 @@ CREATE TABLE IF NOT EXISTS st_inspections (
 
 CREATE INDEX IF NOT EXISTS idx_st_stickers_active ON st_stickers(group_key,is_active);
 CREATE INDEX IF NOT EXISTS idx_st_insp_status ON st_inspections(status,admin_state);
+
+CREATE TABLE IF NOT EXISTS st_analysis_cache (
+  sticker_id INTEGER NOT NULL,
+  algorithm_version TEXT NOT NULL,
+  image_hash TEXT NOT NULL,
+  crop_x REAL NOT NULL,
+  crop_y REAL NOT NULL,
+  crop_width REAL NOT NULL,
+  crop_height REAL NOT NULL,
+  score REAL NOT NULL,
+  status TEXT NOT NULL,
+  recommendation TEXT NOT NULL DEFAULT '',
+  findings_json TEXT NOT NULL DEFAULT '[]',
+  metrics_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (sticker_id, algorithm_version, image_hash)
+);
+

@@ -11,7 +11,9 @@ const S={
   selection:null,
   drawing:false,
   start:null,
-  analysis:null
+  analysis:null,
+  photoHash:null,
+  analyzedSelection:null
 };
 
 document.addEventListener("DOMContentLoaded",()=>{
@@ -153,6 +155,8 @@ async function preparePhoto(blob){
 
   S.photoBlob=blob;
   S.photoImage=await blobImage(blob);
+  S.photoHash=visualHash64(S.photoImage);
+  S.analyzedSelection=null;
   S.photoUrl=URL.createObjectURL(blob);
 
   $("selectionImage").src=S.photoUrl;
@@ -262,12 +266,43 @@ async function analyzeSelected(){
   $("resultStatus").textContent="분석중";
 
   try{
-    const result=missing
-      ? analyzeMissing()
-      : await analyzeCrop();
+    if(missing){
+      S.analysis=analyzeMissing();
+      S.analyzedSelection={x:0,y:0,width:1,height:1};
+      renderAnalysis(S.analysis);
+      $("analysisSection").scrollIntoView({behavior:"smooth"});
+      return;
+    }
 
-    S.analysis=result;
-    renderAnalysis(result);
+    const cached=await getCachedAnalysis();
+
+    if(cached){
+      S.analysis={
+        score:cached.score,
+        status:cached.status,
+        recommendation:cached.recommendation||"",
+        findings:cached.findings||[],
+        metrics:{...(cached.metrics||{}),cacheHit:true}
+      };
+      S.analyzedSelection=cached.crop;
+      showAnalyzedCrop(cached.crop);
+      renderAnalysis(S.analysis);
+      $("findings").insertAdjacentHTML(
+        "afterbegin",
+        '<div class="finding ok">동일 사진의 이전 분석값을 재사용했습니다. 동일 사진은 항상 같은 결과가 적용됩니다.</div>'
+      );
+      $("analysisSection").scrollIntoView({behavior:"smooth"});
+      return;
+    }
+
+    const result=await analyzeCropStable();
+    S.analysis=result.analysis;
+    S.analyzedSelection=result.crop;
+
+    showAnalyzedCrop(result.crop);
+    renderAnalysis(result.analysis);
+
+    await saveCachedAnalysis(result).catch(()=>{});
 
     $("analysisSection").scrollIntoView({behavior:"smooth"});
   }catch(e){
@@ -298,34 +333,64 @@ function analyzeMissing(){
   };
 }
 
-async function analyzeCrop(){
+async function analyzeCropStable(){
   const reference=await loadImage(S.sticker.image_url);
-  const cropCanvas=cropSelectedCanvas(S.photoImage,S.selection,1100);
-  const cropBlob=await canvasBlob(cropCanvas,.92);
 
-  const cropUrl=URL.createObjectURL(cropBlob);
-  $("resultCrop").innerHTML=`<img src="${cropUrl}" alt="선택한 스티커 영역">`;
+  // 1. Free-form user selection is converted into a reference-ratio box.
+  const base=stabilizeSelection(
+    S.selection,
+    S.photoImage.naturalWidth,
+    S.photoImage.naturalHeight,
+    reference.naturalWidth/reference.naturalHeight
+  );
 
-  const current=await blobImage(cropBlob);
-  const metrics=compareStickerV3(reference,current);
+  // 2. Analyze several tiny perturbations around the same normalized box.
+  //    The median is much less affected by one imperfect drag boundary.
+  const variants=selectionVariants(base);
+  const measurements=[];
+
+  for(const box of variants){
+    const canvas=cropBoxCanvas(S.photoImage,box,1100);
+    const blob=await canvasBlob(canvas,.92);
+    const current=await blobImage(blob);
+    const metrics=compareStickerV3(reference,current);
+    measurements.push({box,metrics});
+  }
+
+  const damage=median(measurements.map(x=>x.metrics.damage));
+  const shape=median(measurements.map(x=>x.metrics.shape));
+  const color=median(measurements.map(x=>x.metrics.color));
+
+  // Choose the sample closest to the medians as the canonical displayed/stored crop.
+  let chosen=measurements[0];
+  let chosenDistance=Infinity;
+
+  for(const item of measurements){
+    const d=
+      Math.abs(item.metrics.damage-damage)+
+      Math.abs(item.metrics.shape-shape)*.7+
+      Math.abs(item.metrics.color-color)*.2;
+
+    if(d<chosenDistance){
+      chosenDistance=d;
+      chosen=item;
+    }
+  }
+
+  const metrics={
+    ...chosen.metrics,
+    damage:r1(damage),
+    shape:r1(shape),
+    color:r1(color),
+    ensembleCount:measurements.length,
+    cropStabilized:true
+  };
+
   const rules=S.rules||defaultRules();
 
   let status="정상";
   let recommendation="";
   const findings=[];
-
-  const referenceAspect=reference.naturalWidth/Math.max(1,reference.naturalHeight);
-  const selectedAspect=
-    (S.selection.width*S.photoImage.naturalWidth)/
-    Math.max(1,S.selection.height*S.photoImage.naturalHeight);
-
-  const aspectRatioDelta=Math.max(referenceAspect,selectedAspect)/
-    Math.max(.0001,Math.min(referenceAspect,selectedAspect));
-
-  if(aspectRatioDelta>1.55){
-    status="확인필요";
-    findings.push("선택영역 비율이 기준 스티커와 크게 다릅니다. 스티커만 더 타이트하게 다시 지정해 주세요.");
-  }
 
   if(Number(rules.use_damage)===1){
     if(metrics.damage>=Number(rules.damage_replace_min)){
@@ -352,38 +417,242 @@ async function analyzeCrop(){
     findings.push("설정된 판정기준에서 뚜렷한 이상징후가 없습니다.");
   }
 
-  let score=r1(clamp(
+  const score=r1(clamp(
     metrics.shape*.58+
     (100-metrics.damage)*.37+
     (100-Math.min(100,metrics.color))*.05,
     0,100
   ));
 
-  if(aspectRatioDelta>1.55)score=Math.min(score,75);
-
   return{
-    score,
-    status,
-    recommendation,
-    findings,
-    metrics:{
-      ...metrics,
-      missing:false,
-      aspectRatioDelta:r1(aspectRatioDelta)
+    crop:chosen.box,
+    analysis:{
+      score,
+      status,
+      recommendation,
+      findings,
+      metrics
     }
   };
 }
 
-/*
-V3 BALANCED COMPARISON
-----------------------
-- Vehicle body colour / brightness changes are de-emphasized.
-- HOG-style unsigned edge orientation is used instead of direct pixel brightness.
-- X/Y scale and translation are searched to align the selected sticker area.
-- Only structurally informative reference cells affect the main score.
-- Damage rises when many informative cells become structurally inconsistent.
-- Colour is only a supporting metric.
-*/
+function stabilizeSelection(s,photoW,photoH,referenceAspect){
+  const px={
+    x:s.x*photoW,
+    y:s.y*photoH,
+    width:s.width*photoW,
+    height:s.height*photoH
+  };
+
+  const cx=px.x+px.width/2;
+  const cy=px.y+px.height/2;
+
+  // Expand rather than trim so sticker content is not accidentally clipped.
+  let width=Math.max(px.width,px.height*referenceAspect);
+  let height=width/referenceAspect;
+
+  width*=1.06;
+  height*=1.06;
+
+  width=Math.min(width,photoW);
+  height=Math.min(height,photoH);
+
+  // Quantize to reduce 1~2 px finger/mouse differences.
+  const grid=4;
+  width=Math.max(grid,Math.round(width/grid)*grid);
+  height=Math.max(grid,Math.round(height/grid)*grid);
+
+  let x=Math.round((cx-width/2)/grid)*grid;
+  let y=Math.round((cy-height/2)/grid)*grid;
+
+  x=clamp(x,0,photoW-width);
+  y=clamp(y,0,photoH-height);
+
+  return{
+    x:x/photoW,
+    y:y/photoH,
+    width:width/photoW,
+    height:height/photoH
+  };
+}
+
+function selectionVariants(base){
+  const variants=[];
+  const scales=[.96,1,1.04];
+  const shifts=[
+    [0,0],
+    [-.012,0],
+    [.012,0],
+    [0,-.012],
+    [0,.012]
+  ];
+
+  // Keep the total work small: center at 3 scales + four shifted baseline crops.
+  for(const scale of scales){
+    variants.push(scaleBox(base,scale,0,0));
+  }
+
+  for(const [dx,dy] of shifts.slice(1)){
+    variants.push(scaleBox(base,1,dx,dy));
+  }
+
+  return uniqueBoxes(variants);
+}
+
+function scaleBox(box,scale,dx,dy){
+  const cx=box.x+box.width/2+dx*box.width;
+  const cy=box.y+box.height/2+dy*box.height;
+
+  const width=box.width*scale;
+  const height=box.height*scale;
+
+  return clampBox({
+    x:cx-width/2,
+    y:cy-height/2,
+    width,
+    height
+  });
+}
+
+function clampBox(b){
+  const width=clamp(b.width,.01,1);
+  const height=clamp(b.height,.01,1);
+
+  return{
+    x:clamp(b.x,0,1-width),
+    y:clamp(b.y,0,1-height),
+    width,
+    height
+  };
+}
+
+function uniqueBoxes(boxes){
+  const seen=new Set();
+  const out=[];
+
+  for(const b of boxes){
+    const key=[
+      b.x,b.y,b.width,b.height
+    ].map(v=>v.toFixed(5)).join("|");
+
+    if(seen.has(key))continue;
+    seen.add(key);
+    out.push(b);
+  }
+
+  return out;
+}
+
+function cropBoxCanvas(img,s,maxSide){
+  const sx=s.x*img.naturalWidth;
+  const sy=s.y*img.naturalHeight;
+  const sw=s.width*img.naturalWidth;
+  const sh=s.height*img.naturalHeight;
+
+  const scale=Math.min(1,maxSide/Math.max(sw,sh));
+
+  const c=document.createElement("canvas");
+  c.width=Math.max(1,Math.round(sw*scale));
+  c.height=Math.max(1,Math.round(sh*scale));
+
+  c.getContext("2d").drawImage(
+    img,sx,sy,sw,sh,
+    0,0,c.width,c.height
+  );
+
+  return c;
+}
+
+function showAnalyzedCrop(box){
+  const canvas=cropBoxCanvas(S.photoImage,box,1100);
+  const url=canvas.toDataURL("image/jpeg",.92);
+  $("resultCrop").innerHTML=`<img src="${url}" alt="자동 보정된 스티커 분석영역">`;
+}
+
+async function getCachedAnalysis(){
+  if(!S.photoHash||!S.sticker)return null;
+
+  try{
+    const q=new URLSearchParams({
+      sticker_id:String(S.sticker.id),
+      algorithm_version:"v4-stable",
+      image_hash:S.photoHash
+    });
+
+    const r=await fetchTimeout(`/api/analysis-cache?${q}`,{cache:"no-store"},10000);
+    const d=await r.json();
+
+    if(!r.ok||!d.hit)return null;
+    return d.result||null;
+  }catch{
+    return null;
+  }
+}
+
+async function saveCachedAnalysis(result){
+  if(!S.photoHash||!S.sticker)return;
+
+  await fetchTimeout("/api/analysis-cache",{
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body:JSON.stringify({
+      sticker_id:S.sticker.id,
+      algorithm_version:"v4-stable",
+      image_hash:S.photoHash,
+      crop:result.crop,
+      result:result.analysis
+    })
+  },10000);
+}
+
+function visualHash64(img){
+  const c=document.createElement("canvas");
+  c.width=9;
+  c.height=8;
+
+  const ctx=c.getContext("2d",{willReadFrequently:true});
+  ctx.drawImage(img,0,0,9,8);
+
+  const d=ctx.getImageData(0,0,9,8).data;
+  const gray=[];
+
+  for(let i=0;i<d.length;i+=4){
+    gray.push(.299*d[i]+.587*d[i+1]+.114*d[i+2]);
+  }
+
+  let hex="";
+  let nibble=0;
+  let count=0;
+
+  for(let y=0;y<8;y++){
+    for(let x=0;x<8;x++){
+      const bit=gray[y*9+x]>gray[y*9+x+1]?1:0;
+      nibble=(nibble<<1)|bit;
+      count++;
+
+      if(count===4){
+        hex+=nibble.toString(16);
+        nibble=0;
+        count=0;
+      }
+    }
+  }
+
+  return hex;
+}
+
+function median(values){
+  const a=values
+    .filter(Number.isFinite)
+    .slice()
+    .sort((x,y)=>x-y);
+
+  if(!a.length)return 0;
+
+  const m=Math.floor(a.length/2);
+  return a.length%2?a[m]:(a[m-1]+a[m])/2;
+}
+
 function compareStickerV3(reference,current){
   const W=256;
   const H=128;
@@ -728,7 +997,7 @@ async function submitInspection(){
   }
 
   const missing=$("stickerMissingCheck").checked;
-  const s=S.selection||{x:0,y:0,width:1,height:1};
+  const s=S.analyzedSelection||S.selection||{x:0,y:0,width:1,height:1};
 
   const meta={
     employee_name:name,
@@ -775,6 +1044,8 @@ function resetAllAfterPhoto(){
   S.photoImage=null;
   S.selection=null;
   S.analysis=null;
+  S.photoHash=null;
+  S.analyzedSelection=null;
 }
 
 function defaultRules(){

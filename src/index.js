@@ -79,7 +79,23 @@ function ensureSchema(env) {
       )`),
 
       env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_stickers_active ON st_stickers(group_key,is_active)"),
-      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_insp_status ON st_inspections(status,admin_state)")
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_insp_status ON st_inspections(status,admin_state)"),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_analysis_cache (
+        sticker_id INTEGER NOT NULL,
+        algorithm_version TEXT NOT NULL,
+        image_hash TEXT NOT NULL,
+        crop_x REAL NOT NULL,
+        crop_y REAL NOT NULL,
+        crop_width REAL NOT NULL,
+        crop_height REAL NOT NULL,
+        score REAL NOT NULL,
+        status TEXT NOT NULL,
+        recommendation TEXT NOT NULL DEFAULT '',
+        findings_json TEXT NOT NULL DEFAULT '[]',
+        metrics_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (sticker_id, algorithm_version, image_hash)
+      )`)
     ]).catch(e => {
       schemaPromise = null;
       throw e;
@@ -94,6 +110,8 @@ async function api(request, env, url) {
 
   // Public
   if (p === "/api/config" && request.method === "GET") return getConfig(env);
+  if (p === "/api/analysis-cache" && request.method === "GET") return getAnalysisCache(env, url);
+  if (p === "/api/analysis-cache" && request.method === "POST") return saveAnalysisCache(request, env);
   if (p === "/api/inspection" && request.method === "POST") return saveInspection(request, env);
 
   const stickerImage = p.match(/^\/api\/sticker\/(\d+)\/image$/);
@@ -469,6 +487,91 @@ async function saveRules(request, env) {
   ).run();
 
   return j({ok:true,rules:await readRules(env)});
+}
+
+
+async function getAnalysisCache(env, url) {
+  const stickerId = Number(url.searchParams.get("sticker_id"));
+  const algorithmVersion = txt(url.searchParams.get("algorithm_version"),40);
+  const imageHash = txt(url.searchParams.get("image_hash"),100);
+
+  if (!stickerId || !algorithmVersion || !imageHash) {
+    return j({ok:false,error:"캐시 조회정보가 올바르지 않습니다."},400);
+  }
+
+  const row = await env.DB.prepare(`
+    SELECT crop_x,crop_y,crop_width,crop_height,
+           score,status,recommendation,findings_json,metrics_json,created_at
+    FROM st_analysis_cache
+    WHERE sticker_id=? AND algorithm_version=? AND image_hash=?
+  `).bind(stickerId,algorithmVersion,imageHash).first();
+
+  if (!row) return j({ok:true,hit:false});
+
+  let findings=[];
+  let metrics={};
+
+  try { findings=JSON.parse(row.findings_json||"[]"); } catch {}
+  try { metrics=JSON.parse(row.metrics_json||"{}"); } catch {}
+
+  return j({
+    ok:true,
+    hit:true,
+    result:{
+      score:Number(row.score),
+      status:row.status,
+      recommendation:row.recommendation||"",
+      findings,
+      metrics,
+      crop:{
+        x:Number(row.crop_x),
+        y:Number(row.crop_y),
+        width:Number(row.crop_width),
+        height:Number(row.crop_height)
+      },
+      cached_at:row.created_at
+    }
+  });
+}
+
+async function saveAnalysisCache(request, env) {
+  const body = await request.json().catch(()=>({}));
+
+  const stickerId=Number(body.sticker_id);
+  const algorithmVersion=txt(body.algorithm_version,40);
+  const imageHash=txt(body.image_hash,100);
+  const crop=body.crop||{};
+  const result=body.result||{};
+
+  if (!stickerId || !algorithmVersion || !imageHash) {
+    return j({ok:false,error:"캐시 저장정보가 올바르지 않습니다."},400);
+  }
+
+  const x=Number(crop.x),y=Number(crop.y),w=Number(crop.width),h=Number(crop.height);
+
+  if (![x,y,w,h].every(Number.isFinite) || x<0 || y<0 || w<=0 || h<=0 ||
+      x+w>1.0001 || y+h>1.0001) {
+    return j({ok:false,error:"분석영역 좌표가 올바르지 않습니다."},400);
+  }
+
+  const score=Math.max(0,Math.min(100,Number(result.score)||0));
+  const status=result.status==="정상" ? "정상" : "확인필요";
+
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO st_analysis_cache(
+      sticker_id,algorithm_version,image_hash,
+      crop_x,crop_y,crop_width,crop_height,
+      score,status,recommendation,findings_json,metrics_json
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    stickerId,algorithmVersion,imageHash,
+    x,y,w,h,
+    score,status,txt(result.recommendation,50),
+    JSON.stringify(Array.isArray(result.findings)?result.findings.slice(0,30):[]),
+    JSON.stringify(result.metrics&&typeof result.metrics==="object"?result.metrics:{})
+  ).run();
+
+  return j({ok:true});
 }
 
 async function saveInspection(request, env) {
