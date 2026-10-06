@@ -289,3 +289,16 @@ body.modal-open{overflow:hidden}
     align-items:flex-start;
   }
 }
+
+
+/* ===== V7 landscape camera framing ===== */
+.landscape-camera-stage{aspect-ratio:16/9;min-height:0}
+.landscape-camera-stage video{transform-origin:center center;transition:transform .18s ease;object-fit:contain}
+.landscape-camera-stage video.quarter-turn{width:56.25%;height:177.78%;left:21.875%;top:-38.89%}
+.landscape-camera-controls{grid-template-columns:1fr 1fr 1fr}
+.landscape-frame-guide{position:absolute;inset:5%;z-index:3;border:1px dashed rgba(255,255,255,.65);border-radius:10px;pointer-events:none}
+.landscape-frame-guide span{position:absolute;left:8px;top:8px;padding:4px 7px;border-radius:6px;background:rgba(0,0,0,.58);color:#fff;font-size:10px;font-weight:800}
+.portrait-guide{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:20px;text-align:center;color:#fff;background:rgba(5,12,22,.72);backdrop-filter:blur(2px)}
+.phone-rotate-icon{display:flex;align-items:center;justify-content:center;width:50px;height:50px;border:2px solid rgba(255,255,255,.85);border-radius:14px;font-size:28px}
+.portrait-guide strong{font-size:16px}.portrait-guide span{max-width:420px;color:#dbe4ef;font-size:12px;line-height:1.55}
+@media(max-width:600px){.landscape-camera-controls{grid-template-columns:1fr 1fr}.landscape-camera-controls #captureBtn{grid-column:1/-1}}

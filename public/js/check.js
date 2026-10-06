@@ -13,7 +13,8 @@ const S={
   start:null,
   analysis:null,
   photoHash:null,
-  analyzedSelection:null
+  analyzedSelection:null,
+  cameraRotation:0
 };
 
 document.addEventListener("DOMContentLoaded",()=>{
@@ -24,8 +25,11 @@ document.addEventListener("DOMContentLoaded",()=>{
 
 function bind(){
   $("startCameraBtn").onclick=startCamera;
+  $("rotateCameraBtn").onclick=rotateCameraPreview;
   $("captureBtn").onclick=captureVideo;
   $("photoInput").onchange=pickFile;
+  window.addEventListener("resize",updateOrientationGuide);
+  window.addEventListener("orientationchange",()=>setTimeout(updateOrientationGuide,250));
 
   $("selectionStage").addEventListener("pointerdown",startSelect);
   $("selectionStage").addEventListener("pointermove",moveSelect);
@@ -107,45 +111,89 @@ function selectSticker(id){
 
 async function startCamera(){
   stopCamera();
-
   try{
+    S.cameraRotation=0;
     S.stream=await navigator.mediaDevices.getUserMedia({
       audio:false,
       video:{
         facingMode:{ideal:"environment"},
-        width:{ideal:1920},
-        height:{ideal:1080}
+        width:{ideal:1920},height:{ideal:1080},aspectRatio:{ideal:16/9}
       }
     });
-
     $("cameraVideo").srcObject=S.stream;
     await $("cameraVideo").play();
-
     $("cameraVideo").style.display="block";
     $("cameraPlaceholder").style.display="none";
     $("captureBtn").disabled=false;
-    $("cameraStatus").textContent="LIVE";
+    $("rotateCameraBtn").disabled=false;
+    applyCameraRotation();
+    updateOrientationGuide();
+    updateCameraStatus();
   }catch(e){
     $("cameraStatus").textContent="카메라 실패";
+    $("captureBtn").disabled=true;
+    $("rotateCameraBtn").disabled=true;
   }
 }
 
 function stopCamera(){
   if(S.stream)S.stream.getTracks().forEach(t=>t.stop());
   S.stream=null;
+  if($("rotateCameraBtn"))$("rotateCameraBtn").disabled=true;
+  if($("captureBtn"))$("captureBtn").disabled=true;
 }
 
 async function captureVideo(){
   const v=$("cameraVideo");
   if(!S.stream||v.readyState<2)return;
-
+  const sourceW=v.videoWidth, sourceH=v.videoHeight;
+  const rotation=((S.cameraRotation%360)+360)%360;
   const c=$("captureCanvas");
-  c.width=v.videoWidth;
-  c.height=v.videoHeight;
-  c.getContext("2d").drawImage(v,0,0);
-
-  const blob=await new Promise(resolve=>c.toBlob(resolve,"image/jpeg",.88));
+  if(rotation===90||rotation===270){c.width=sourceH;c.height=sourceW}else{c.width=sourceW;c.height=sourceH}
+  const ctx=c.getContext("2d");
+  ctx.save();
+  if(rotation===90){ctx.translate(c.width,0);ctx.rotate(Math.PI/2)}
+  else if(rotation===180){ctx.translate(c.width,c.height);ctx.rotate(Math.PI)}
+  else if(rotation===270){ctx.translate(0,c.height);ctx.rotate(-Math.PI/2)}
+  ctx.drawImage(v,0,0,sourceW,sourceH);
+  ctx.restore();
+  const blob=await new Promise(resolve=>c.toBlob(resolve,"image/jpeg",.90));
   await preparePhoto(blob);
+}
+
+function rotateCameraPreview(){
+  if(!S.stream)return;
+  S.cameraRotation=(S.cameraRotation+90)%360;
+  applyCameraRotation();
+  updateCameraStatus();
+}
+
+function applyCameraRotation(){
+  const v=$("cameraVideo");
+  if(!v)return;
+  const rotation=((S.cameraRotation%360)+360)%360;
+  v.style.transform=`rotate(${rotation}deg)`;
+  v.classList.toggle("quarter-turn",rotation===90||rotation===270);
+}
+
+function updateOrientationGuide(){
+  if(!$("portraitGuide"))return;
+  const isPortrait=window.innerHeight>window.innerWidth;
+  $("portraitGuide").classList.toggle("hidden",!(S.stream&&isPortrait));
+  if(S.stream)updateCameraStatus();
+}
+
+function updateCameraStatus(){
+  if(!S.stream)return;
+  const v=$("cameraVideo");
+  const nativeLandscape=v.videoWidth>0&&v.videoHeight>0&&v.videoWidth>=v.videoHeight;
+  const r=((S.cameraRotation%360)+360)%360;
+  const effectiveLandscape=(nativeLandscape&&(r===0||r===180))||(!nativeLandscape&&(r===90||r===270));
+  $("cameraStatus").textContent=effectiveLandscape?`가로 촬영 · ${r}°`:`세로 감지 · ${r}°`;
+  $("orientationMessage").className=`message ${effectiveLandscape?"success":"warn"}`;
+  $("orientationMessage").textContent=effectiveLandscape
+    ? "가로 촬영 준비 완료. 기준 예시사진과 비슷하게 차량 전체와 스티커가 함께 보이도록 촬영하세요."
+    : "현재 세로 방향으로 인식됩니다. 휴대폰을 가로로 돌리거나 ‘화면 90° 회전’을 눌러 프레임을 맞춰주세요.";
 }
 
 async function pickFile(e){
