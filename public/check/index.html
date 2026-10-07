@@ -57,28 +57,25 @@
     <span id="cameraStatus" class="badge">대기</span>
   </div>
 
-  <div id="cameraStage" class="camera-stage landscape-camera-stage">
-    <video id="cameraVideo" autoplay playsinline muted></video>
-    <div id="cameraPlaceholder" class="camera-placeholder">
-      <strong>차량에서 해당 스티커가 보이도록 가로로 촬영해 주세요.</strong>
-      <span>휴대폰을 가로 방향으로 돌리면 기준 예시사진과 비슷한 프레임으로 맞출 수 있습니다.</span>
-    </div>
-    <div id="portraitGuide" class="portrait-guide hidden">
-      <div class="phone-rotate-icon">↻</div>
-      <strong>휴대폰을 가로로 돌려주세요</strong>
-      <span>차량 전체와 스티커 위치가 함께 보이도록 16:9 가로 촬영을 권장합니다.</span>
-    </div>
-    <div class="landscape-frame-guide" aria-hidden="true"><span>가로 촬영 가이드 · 16:9</span></div>
+  <div class="message info photo-requirement">
+    <strong>촬영 방향은 자유입니다.</strong>
+    세로·가로와 관계없이 <b>차량번호판과 점검할 홍보스티커가 한 장의 사진에 함께 선명하게 보이도록</b> 촬영해 주세요.
   </div>
 
-  <div class="camera-controls landscape-camera-controls">
+  <div id="cameraStage" class="camera-stage free-camera-stage">
+    <video id="cameraVideo" autoplay playsinline muted></video>
+    <div id="cameraPlaceholder" class="camera-placeholder">
+      <strong>번호판 + 홍보스티커가 함께 보이게 촬영</strong>
+      <span>차량 전체를 꼭 담을 필요는 없습니다. 두 필수영역이 잘 보이면 됩니다.</span>
+    </div>
+  </div>
+
+  <div class="camera-controls free-camera-controls">
     <button id="startCameraBtn" class="btn primary">카메라 시작</button>
     <button id="captureBtn" class="btn secondary" disabled>현재 화면 촬영</button>
   </div>
 
-  <div id="orientationMessage" class="message info compact-orientation-message">권장 촬영방향: 휴대폰 가로 · 정상부착 예시사진과 비슷하게 차량 전체와 스티커가 함께 보이도록 맞춰주세요.</div>
-
-  <label class="btn full" style="margin-top:10px">
+  <label class="btn full photo-file-button">
     사진 촬영 / 앨범에서 선택
     <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
   </label>
@@ -88,30 +85,47 @@
 
 <section id="selectionSection" class="card hidden">
   <div class="section-head">
-    <div><span class="step">STEP 04</span><h2>스티커 영역 지정</h2></div>
-    <span id="selectionStatus" class="badge">영역 선택</span>
+    <div><span class="step">STEP 04</span><h2>필수영역 확인</h2></div>
+    <span id="selectionStatus" class="badge">스티커 선택</span>
   </div>
 
   <div class="message info">
-    정상부착 예시사진 1번을 참고해 <b>실제 스티커가 있는 주변을 대략 드래그</b>하세요.
-    프로그램은 정상 스티커 원본과 정상부착 예시사진의 보정 데이터를 사용해 구조 손상 여부를 계산합니다.
+    사진에서 <b>① 홍보스티커 ② 차량번호판</b>을 각각 지정해 주세요.
+    번호판은 사진에 제대로 노출되었는지 확인하는 용도이고,
+    스티커는 정상 스티커 원본과 정상부착 예시사진을 기준으로 부착상태를 분석합니다.
+  </div>
+
+  <div class="selection-mode-bar">
+    <button id="stickerModeBtn" class="btn primary" type="button">① 스티커 영역 지정</button>
+    <button id="plateModeBtn" class="btn" type="button">② 번호판 영역 지정</button>
+    <div class="selection-progress">
+      <span id="stickerSelectionState" class="pill review">스티커 미지정</span>
+      <span id="plateSelectionState" class="pill review">번호판 미지정</span>
+    </div>
   </div>
 
   <div id="selectionStage" class="selection-stage" style="margin-top:12px">
     <img id="selectionImage" alt="점검사진">
-    <div id="selectionBox" class="selection-box hidden"></div>
+    <div id="stickerSelectionBox" class="selection-box sticker-selection-box hidden"></div>
+    <div id="plateSelectionBox" class="selection-box plate-selection-box hidden"></div>
+    <div id="draftSelectionBox" class="selection-box draft-selection-box hidden"></div>
   </div>
 
   <div class="selection-actions">
-    <button id="resetSelectionBtn" class="btn">영역 다시 선택</button>
+    <button id="resetStickerBtn" class="btn" type="button">스티커 다시 지정</button>
+    <button id="resetPlateBtn" class="btn" type="button">번호판 다시 지정</button>
   </div>
 
   <label class="missing-check" style="margin-top:10px">
     <input id="stickerMissingCheck" type="checkbox">
-    <span>스티커가 완전히 없어 영역을 지정할 수 없음</span>
+    <span>홍보스티커가 완전히 없어 스티커 영역을 지정할 수 없음</span>
   </label>
 
-  <button id="analyzeBtn" class="btn primary full" style="margin-top:12px" disabled>스티커 비교분석</button>
+  <div id="requiredAreaMessage" class="message warn">
+    스티커와 번호판 두 영역을 모두 확인해야 분석할 수 있습니다.
+  </div>
+
+  <button id="analyzeBtn" class="btn primary full" style="margin-top:12px" disabled>필수영역 확인 후 스티커 비교분석</button>
 </section>
 
 <section id="analysisSection" class="card hidden">
@@ -147,7 +161,7 @@
   </div>
 
   <button id="submitBtn" class="btn primary full" style="margin-top:14px">점검결과 제출</button>
-  <div id="submitMessage" class="message info">원본 차량사진과 선택영역 좌표, 분석결과가 저장됩니다.</div>
+  <div id="submitMessage" class="message info">원본 차량사진, 스티커/번호판 확인영역, 분석결과가 저장됩니다.</div>
 </section>
 
 </main>

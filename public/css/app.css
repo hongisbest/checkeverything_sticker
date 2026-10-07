@@ -151,6 +151,20 @@ body.modal-open{overflow:hidden}
 .guide-example-box{
   position:relative;
 }
+.guide-media-frame{
+  position:relative;
+  flex:0 0 auto;
+  max-width:100%;
+  max-height:100%;
+  overflow:hidden;
+  visibility:hidden;
+}
+.guide-media-frame img{
+  display:block;
+  width:100%;
+  height:100%;
+  object-fit:fill;
+}
 .guide-roi{
   position:absolute;
   border:2px solid #ff4238;
@@ -292,7 +306,7 @@ body.modal-open{overflow:hidden}
 
 
 /* ===== V7 landscape camera framing ===== */
-.landscape-camera-stage{aspect-ratio:16/9;min-height:0}
+.landscape-camera-stage{aspect-ratio:4/3;min-height:0}
 .landscape-camera-stage video{transform-origin:center center;transition:transform .18s ease;object-fit:contain}
 .landscape-camera-stage video.quarter-turn{width:56.25%;height:177.78%;left:21.875%;top:-38.89%}
 .landscape-camera-controls{grid-template-columns:1fr 1fr 1fr}
@@ -308,7 +322,7 @@ body.modal-open{overflow:hidden}
   width:min(100%,760px);
   margin-left:auto;
   margin-right:auto;
-  aspect-ratio:16/9;
+  aspect-ratio:4/3;
 }
 .landscape-camera-controls{
   width:min(100%,760px);
@@ -325,12 +339,12 @@ body.modal-open{overflow:hidden}
   .camera-stage.landscape-camera-stage{
     width:auto;
     height:min(49dvh,235px);
-    max-width:72vw;
-    aspect-ratio:16/9;
+    max-width:62vw;
+    aspect-ratio:4/3;
   }
   .camera-stage.landscape-camera-stage video{object-fit:contain}
   .landscape-camera-controls{
-    width:min(72vw,418px);
+    width:min(62vw,420px);
     margin-top:7px;
     gap:7px;
   }
@@ -340,7 +354,7 @@ body.modal-open{overflow:hidden}
     font-size:12px;
   }
   .compact-orientation-message{
-    width:min(72vw,418px);
+    width:min(62vw,420px);
     margin-top:7px;
     padding:7px 9px;
     font-size:10px;
@@ -355,7 +369,7 @@ body.modal-open{overflow:hidden}
   .card:has(#cameraStage) .section-head h2{font-size:16px}
   .card:has(#cameraStage) .section-head .step{font-size:8px}
   .card:has(#cameraStage) > label.btn.full{
-    width:min(72vw,418px);
+    width:min(62vw,420px);
     margin-left:auto;
     margin-right:auto;
     min-height:34px;
@@ -365,13 +379,123 @@ body.modal-open{overflow:hidden}
 @media (orientation:landscape) and (max-height:450px){
   .camera-stage.landscape-camera-stage{
     height:min(45dvh,195px);
-    max-width:65vw;
+    max-width:58vw;
   }
   .landscape-camera-controls,
   .compact-orientation-message,
   .card:has(#cameraStage) > label.btn.full{
-    width:min(65vw,347px);
+    width:min(58vw,360px);
   }
   .compact-orientation-message{display:none}
 }
-
+/* ===== V10 4:3 guide + camera standard ===== */
+.guide-example-box{
+  aspect-ratio:4/3;
+}
+.landscape-camera-stage{
+  aspect-ratio:auto;
+}
+/* ===== V11 free orientation + plate/sticker confirmation ===== */
+.free-camera-stage{
+  width:min(100%,760px);
+  height:min(54dvh,520px);
+  min-height:260px;
+  margin:12px auto 0;
+  aspect-ratio:auto!important;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.free-camera-stage video{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  object-fit:contain;
+}
+.free-camera-controls{
+  width:min(100%,760px);
+  margin-left:auto;
+  margin-right:auto;
+  grid-template-columns:1fr 1fr;
+}
+.photo-file-button{
+  width:min(100%,760px)!important;
+  margin:10px auto 0!important;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.photo-requirement{
+  width:min(100%,760px);
+  margin-left:auto;
+  margin-right:auto;
+}
+.selection-mode-bar{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:12px;
+}
+.selection-progress{
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  margin-left:auto;
+}
+.sticker-selection-box{
+  border-color:#ff4238;
+  background:rgba(255,66,56,.12);
+  box-shadow:none;
+}
+.sticker-selection-box::after{
+  content:"홍보스티커";
+  background:#ff4238;
+}
+.plate-selection-box{
+  border-color:#2563eb;
+  background:rgba(37,99,235,.12);
+  box-shadow:none;
+}
+.plate-selection-box::after{
+  content:"번호판";
+  background:#2563eb;
+}
+.draft-selection-box{
+  border-color:#f59e0b;
+  background:rgba(245,158,11,.10);
+  box-shadow:none;
+}
+.draft-selection-box::after{
+  content:"지정 중";
+  background:#f59e0b;
+}
+@media(max-width:600px){
+  .free-camera-stage{
+    height:min(46dvh,430px);
+    min-height:220px;
+  }
+  .free-camera-controls{
+    grid-template-columns:1fr 1fr;
+  }
+  .selection-progress{
+    width:100%;
+    margin-left:0;
+  }
+  .selection-mode-bar .btn{
+    flex:1;
+  }
+}
+@media(orientation:landscape) and (max-height:520px){
+  .free-camera-stage{
+    height:min(48dvh,230px);
+    min-height:170px;
+    width:min(70vw,620px);
+  }
+  .free-camera-controls,
+  .photo-file-button,
+  .photo-requirement{
+    width:min(70vw,620px)!important;
+  }
+}

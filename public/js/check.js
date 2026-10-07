@@ -13,7 +13,11 @@ const S={
   start:null,
   analysis:null,
   photoHash:null,
-  analyzedSelection:null
+  analyzedSelection:null,
+  plateSelection:null,
+  selectionMode:"sticker",
+  draftSelection:null,
+  plateVisibility:null
 };
 
 document.addEventListener("DOMContentLoaded",()=>{
@@ -26,14 +30,15 @@ function bind(){
   $("startCameraBtn").onclick=startCamera;
   $("captureBtn").onclick=captureVideo;
   $("photoInput").onchange=pickFile;
-  window.addEventListener("resize",updateOrientationGuide);
-  window.addEventListener("orientationchange",()=>setTimeout(updateOrientationGuide,250));
 
   $("selectionStage").addEventListener("pointerdown",startSelect);
   $("selectionStage").addEventListener("pointermove",moveSelect);
   window.addEventListener("pointerup",endSelect);
 
-  $("resetSelectionBtn").onclick=resetSelection;
+  $("stickerModeBtn").onclick=()=>setSelectionMode("sticker");
+  $("plateModeBtn").onclick=()=>setSelectionMode("plate");
+  $("resetStickerBtn").onclick=resetStickerSelection;
+  $("resetPlateBtn").onclick=resetPlateSelection;
   $("stickerMissingCheck").onchange=toggleMissing;
   $("analyzeBtn").onclick=analyzeSelected;
   $("submitBtn").onclick=submitInspection;
@@ -87,43 +92,92 @@ function selectSticker(id){
   const guide=S.sticker.guide_example;
 
   if(guide){
-    $("referenceBox").innerHTML=`<img src="${guide.image_url}?v=${Date.now()}" alt="정상부착 예시사진 1번">`;
-
-    if(guide.calibrated){
-      const roi=document.createElement("div");
-      roi.className="guide-roi";
-      roi.style.cssText=`left:${Number(guide.crop_x)*100}%;top:${Number(guide.crop_y)*100}%;width:${Number(guide.crop_width)*100}%;height:${Number(guide.crop_height)*100}%`;
-      roi.innerHTML="<span>스티커 위치</span>";
-      $("referenceBox").appendChild(roi);
-    }
+    renderGuideExample(guide);
   }else{
-    $("referenceBox").innerHTML='<div class="empty">관리자가 정상부착 예시사진을 등록해야 합니다.</div>';
+    const box=$("referenceBox");
+    if(box._guideResizeObserver){
+      box._guideResizeObserver.disconnect();
+      box._guideResizeObserver=null;
+    }
+    box.innerHTML='<div class="empty">관리자가 정상부착 예시사진을 등록해야 합니다.</div>';
   }
 
   $("stickerTitle").textContent=`${S.sticker.name} · 정상부착 예시사진 1번`;
   $("sideHintText").textContent=`권장 위치: ${sideLabel(S.sticker.side_hint)}`;
-  $("guideText").textContent=S.sticker.guide_text || "예시사진과 비슷하게 차량과 스티커가 함께 보이도록 촬영해 주세요.";
+  $("guideText").textContent=S.sticker.guide_text || "촬영 방향은 자유입니다. 번호판과 스티커가 한 사진에 함께 선명하게 보이도록 촬영해 주세요.";
 
   resetAllAfterPhoto();
 }
 
+function renderGuideExample(guide){
+  const box=$("referenceBox");
+
+  if(box._guideResizeObserver){
+    box._guideResizeObserver.disconnect();
+    box._guideResizeObserver=null;
+  }
+
+  box.innerHTML=`
+    <div class="guide-media-frame">
+      <img src="${guide.image_url}?v=${Date.now()}" alt="정상부착 예시사진 1번">
+    </div>
+  `;
+
+  const frame=box.querySelector(".guide-media-frame");
+  const img=frame.querySelector("img");
+
+  if(guide.calibrated){
+    const roi=document.createElement("div");
+    roi.className="guide-roi";
+    roi.style.cssText=`left:${Number(guide.crop_x)*100}%;top:${Number(guide.crop_y)*100}%;width:${Number(guide.crop_width)*100}%;height:${Number(guide.crop_height)*100}%`;
+    roi.innerHTML="<span>스티커 위치</span>";
+    frame.appendChild(roi);
+  }
+
+  const syncFrameToImage=()=>{
+    if(!img.naturalWidth||!img.naturalHeight)return;
+
+    const boxWidth=box.clientWidth;
+    const boxHeight=box.clientHeight;
+    if(!boxWidth||!boxHeight)return;
+
+    const scale=Math.min(
+      boxWidth/img.naturalWidth,
+      boxHeight/img.naturalHeight
+    );
+
+    frame.style.width=`${Math.max(1,Math.round(img.naturalWidth*scale))}px`;
+    frame.style.height=`${Math.max(1,Math.round(img.naturalHeight*scale))}px`;
+    frame.style.visibility="visible";
+  };
+
+  img.addEventListener("load",syncFrameToImage,{once:true});
+  if(img.complete)syncFrameToImage();
+
+  if("ResizeObserver" in window){
+    box._guideResizeObserver=new ResizeObserver(syncFrameToImage);
+    box._guideResizeObserver.observe(box);
+  }
+}
+
 async function startCamera(){
   stopCamera();
+
   try{
     S.stream=await navigator.mediaDevices.getUserMedia({
       audio:false,
       video:{
-        facingMode:{ideal:"environment"},
-        width:{ideal:1920},height:{ideal:1080},aspectRatio:{ideal:16/9}
+        facingMode:{ideal:"environment"}
       }
     });
+
     $("cameraVideo").srcObject=S.stream;
     await $("cameraVideo").play();
+
     $("cameraVideo").style.display="block";
     $("cameraPlaceholder").style.display="none";
     $("captureBtn").disabled=false;
-    updateOrientationGuide();
-    updateCameraStatus();
+    $("cameraStatus").textContent="카메라 준비";
   }catch(e){
     $("cameraStatus").textContent="카메라 실패";
     $("captureBtn").disabled=true;
@@ -139,29 +193,15 @@ function stopCamera(){
 async function captureVideo(){
   const v=$("cameraVideo");
   if(!S.stream||v.readyState<2)return;
+
   const c=$("captureCanvas");
   c.width=v.videoWidth;
   c.height=v.videoHeight;
+
   c.getContext("2d").drawImage(v,0,0,c.width,c.height);
+
   const blob=await new Promise(resolve=>c.toBlob(resolve,"image/jpeg",.90));
   await preparePhoto(blob);
-}
-
-function updateOrientationGuide(){
-  if(!$("portraitGuide"))return;
-  const isPortrait=window.innerHeight>window.innerWidth;
-  $("portraitGuide").classList.toggle("hidden",!(S.stream&&isPortrait));
-  if(S.stream)updateCameraStatus();
-}
-
-function updateCameraStatus(){
-  if(!S.stream)return;
-  const isLandscape=window.innerWidth>=window.innerHeight;
-  $("cameraStatus").textContent=isLandscape?"가로 촬영 준비":"세로 화면";
-  $("orientationMessage").className=`message ${isLandscape?"success":"warn"} compact-orientation-message`;
-  $("orientationMessage").textContent=isLandscape
-    ? "가로 촬영 준비 완료. 프레임 안에 차량 전체와 스티커가 함께 보이도록 맞춘 뒤 바로 아래 촬영 버튼을 눌러주세요."
-    : "휴대폰을 가로로 돌려주세요. 가로모드에서 촬영 프레임과 촬영 버튼이 한 화면에 보이도록 구성되어 있습니다.";
 }
 
 async function pickFile(e){
@@ -196,7 +236,24 @@ async function preparePhoto(blob){
   $("selectionSection").classList.remove("hidden");
   $("analysisSection").classList.add("hidden");
 
-  resetSelection();
+  S.selection=null;
+  S.plateSelection=null;
+  S.plateVisibility=null;
+  S.draftSelection=null;
+  S.analyzedSelection=null;
+
+  $("stickerMissingCheck").checked=false;
+  $("stickerSelectionBox").classList.add("hidden");
+  $("plateSelectionBox").classList.add("hidden");
+  $("draftSelectionBox").classList.add("hidden");
+
+  $("stickerSelectionState").textContent="스티커 미지정";
+  $("stickerSelectionState").className="pill review";
+  $("plateSelectionState").textContent="번호판 미지정";
+  $("plateSelectionState").className="pill review";
+
+  setSelectionMode("sticker");
+  updateRequiredAreaState();
 
   $("selectionSection").scrollIntoView({behavior:"smooth"});
 }
@@ -209,16 +266,37 @@ function point(e){
   };
 }
 
+function setSelectionMode(mode){
+  if(!["sticker","plate"].includes(mode))return;
+
+  if(mode==="sticker"&&$("stickerMissingCheck").checked){
+    mode="plate";
+  }
+
+  S.selectionMode=mode;
+  S.draftSelection=null;
+  $("draftSelectionBox").classList.add("hidden");
+
+  $("stickerModeBtn").classList.toggle("primary",mode==="sticker");
+  $("plateModeBtn").classList.toggle("primary",mode==="plate");
+
+  $("selectionStatus").textContent=mode==="sticker"
+    ? "스티커 선택"
+    : "번호판 선택";
+}
+
 function startSelect(e){
-  if(!S.photoImage||$("stickerMissingCheck").checked)return;
+  if(!S.photoImage)return;
+  if(S.selectionMode==="sticker"&&$("stickerMissingCheck").checked)return;
 
   e.preventDefault();
+
   S.drawing=true;
   S.start=point(e);
-  S.selection={x:S.start.x,y:S.start.y,width:0,height:0};
+  S.draftSelection={x:S.start.x,y:S.start.y,width:0,height:0};
 
-  $("selectionBox").classList.remove("hidden");
-  renderSelection();
+  $("draftSelectionBox").classList.remove("hidden");
+  renderBox($("draftSelectionBox"),S.draftSelection);
 }
 
 function moveSelect(e){
@@ -226,34 +304,62 @@ function moveSelect(e){
 
   const p=point(e);
 
-  S.selection={
+  S.draftSelection={
     x:Math.min(S.start.x,p.x),
     y:Math.min(S.start.y,p.y),
     width:Math.abs(p.x-S.start.x),
     height:Math.abs(p.y-S.start.y)
   };
 
-  renderSelection();
+  renderBox($("draftSelectionBox"),S.draftSelection);
 }
 
 function endSelect(){
   if(!S.drawing)return;
+
   S.drawing=false;
 
-  if(!S.selection||S.selection.width<.02||S.selection.height<.02){
-    resetSelection();
+  if(!S.draftSelection||
+     S.draftSelection.width<.015||
+     S.draftSelection.height<.015){
+    S.draftSelection=null;
+    $("draftSelectionBox").classList.add("hidden");
     return;
   }
 
-  $("selectionStatus").textContent="선택완료";
-  $("analyzeBtn").disabled=false;
+  if(S.selectionMode==="sticker"){
+    S.selection={...S.draftSelection};
+    renderBox($("stickerSelectionBox"),S.selection);
+    $("stickerSelectionBox").classList.remove("hidden");
+    $("stickerSelectionState").textContent="스티커 지정완료";
+    $("stickerSelectionState").className="pill normal";
+
+    setSelectionMode("plate");
+  }else{
+    S.plateSelection={...S.draftSelection};
+    S.plateVisibility=analyzePlateVisibility(S.photoImage,S.plateSelection);
+
+    renderBox($("plateSelectionBox"),S.plateSelection);
+    $("plateSelectionBox").classList.remove("hidden");
+
+    $("plateSelectionState").textContent=S.plateVisibility.score>=22
+      ? "번호판 확인완료"
+      : "번호판 재확인 권장";
+
+    $("plateSelectionState").className=S.plateVisibility.score>=22
+      ? "pill normal"
+      : "pill review";
+  }
+
+  S.draftSelection=null;
+  $("draftSelectionBox").classList.add("hidden");
+  updateRequiredAreaState();
 }
 
-function renderSelection(){
-  if(!S.selection)return;
+function renderBox(el,s){
+  if(!el||!s)return;
 
-  const s=S.selection;
-  Object.assign($("selectionBox").style,{
+  Object.assign(el.style,{
     left:`${s.x*100}%`,
     top:`${s.y*100}%`,
     width:`${s.width*100}%`,
@@ -261,26 +367,142 @@ function renderSelection(){
   });
 }
 
-function resetSelection(){
+function resetStickerSelection(){
   S.selection=null;
-  S.drawing=false;
-  S.start=null;
+  S.analyzedSelection=null;
 
-  $("selectionBox").classList.add("hidden");
-  $("selectionStatus").textContent="영역 선택";
-  $("analyzeBtn").disabled=!$("stickerMissingCheck").checked;
+  $("stickerSelectionBox").classList.add("hidden");
+  $("stickerSelectionState").textContent=$("stickerMissingCheck").checked
+    ? "스티커 없음"
+    : "스티커 미지정";
+  $("stickerSelectionState").className=$("stickerMissingCheck").checked
+    ? "pill normal"
+    : "pill review";
+
+  if(!$("stickerMissingCheck").checked){
+    setSelectionMode("sticker");
+  }
+
+  updateRequiredAreaState();
+}
+
+function resetPlateSelection(){
+  S.plateSelection=null;
+  S.plateVisibility=null;
+
+  $("plateSelectionBox").classList.add("hidden");
+  $("plateSelectionState").textContent="번호판 미지정";
+  $("plateSelectionState").className="pill review";
+
+  setSelectionMode("plate");
+  updateRequiredAreaState();
 }
 
 function toggleMissing(){
   if($("stickerMissingCheck").checked){
     S.selection=null;
-    $("selectionBox").classList.add("hidden");
-    $("selectionStatus").textContent="스티커 없음";
-    $("analyzeBtn").disabled=false;
+    S.analyzedSelection=null;
+
+    $("stickerSelectionBox").classList.add("hidden");
+    $("stickerSelectionState").textContent="스티커 없음";
+    $("stickerSelectionState").className="pill normal";
+
+    setSelectionMode("plate");
   }else{
-    $("selectionStatus").textContent="영역 선택";
-    $("analyzeBtn").disabled=!S.selection;
+    $("stickerSelectionState").textContent=S.selection
+      ? "스티커 지정완료"
+      : "스티커 미지정";
+    $("stickerSelectionState").className=S.selection
+      ? "pill normal"
+      : "pill review";
+
+    if(!S.selection)setSelectionMode("sticker");
   }
+
+  updateRequiredAreaState();
+}
+
+function updateRequiredAreaState(){
+  const stickerOk=$("stickerMissingCheck").checked||!!S.selection;
+  const plateOk=!!S.plateSelection;
+
+  $("analyzeBtn").disabled=!(stickerOk&&plateOk);
+
+  if(stickerOk&&plateOk){
+    const weakPlate=S.plateVisibility&&S.plateVisibility.score<22;
+
+    $("selectionStatus").textContent="필수영역 확인완료";
+    $("requiredAreaMessage").className=`message ${weakPlate?"warn":"success"}`;
+    $("requiredAreaMessage").textContent=weakPlate
+      ? "두 영역은 지정됐지만 번호판 영역이 작거나 흐릴 수 있습니다. 번호판이 실제로 읽을 수 있을 정도로 보이는지 확인한 뒤 분석하세요."
+      : "스티커와 번호판이 모두 확인되었습니다. 스티커 부착상태를 분석할 수 있습니다.";
+  }else{
+    const missing=[];
+
+    if(!stickerOk)missing.push("스티커");
+    if(!plateOk)missing.push("번호판");
+
+    $("selectionStatus").textContent=`${missing.join(" · ")} 확인 필요`;
+    $("requiredAreaMessage").className="message warn";
+    $("requiredAreaMessage").textContent=`${missing.join("와 ")} 영역을 지정해 주세요.`;
+  }
+}
+
+function analyzePlateVisibility(img,s){
+  const canvas=document.createElement("canvas");
+  canvas.width=180;
+  canvas.height=72;
+
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
+
+  const sx=s.x*img.naturalWidth;
+  const sy=s.y*img.naturalHeight;
+  const sw=s.width*img.naturalWidth;
+  const sh=s.height*img.naturalHeight;
+
+  ctx.drawImage(img,sx,sy,sw,sh,0,0,canvas.width,canvas.height);
+
+  const data=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+  const gray=new Float32Array(canvas.width*canvas.height);
+
+  let sum=0;
+  let sumSq=0;
+
+  for(let i=0,p=0;i<data.length;i+=4,p++){
+    const g=.299*data[i]+.587*data[i+1]+.114*data[i+2];
+    gray[p]=g;
+    sum+=g;
+    sumSq+=g*g;
+  }
+
+  const n=gray.length;
+  const mean=sum/n;
+  const variance=Math.max(0,sumSq/n-mean*mean);
+  const sd=Math.sqrt(variance);
+
+  let edges=0;
+  let edgeTotal=0;
+
+  for(let y=1;y<canvas.height-1;y++){
+    for(let x=1;x<canvas.width-1;x++){
+      const p=y*canvas.width+x;
+      const gx=Math.abs(gray[p+1]-gray[p-1]);
+      const gy=Math.abs(gray[p+canvas.width]-gray[p-canvas.width]);
+
+      if(gx+gy>36)edges++;
+      edgeTotal++;
+    }
+  }
+
+  const edgeDensity=edges/Math.max(1,edgeTotal);
+  const contrastScore=clamp(sd/55*100,0,100);
+  const edgeScore=clamp(edgeDensity/.18*100,0,100);
+
+  return{
+    score:r1(contrastScore*.45+edgeScore*.55),
+    contrast:r1(contrastScore),
+    edgeDensity:r1(edgeDensity*100)
+  };
 }
 
 async function analyzeSelected(){
@@ -288,8 +510,13 @@ async function analyzeSelected(){
 
   const missing=$("stickerMissingCheck").checked;
 
+  if(!S.plateSelection){
+    alert("번호판 영역을 먼저 지정해 주세요.");
+    return;
+  }
+
   if(!missing&&!S.selection){
-    alert("스티커 영역을 먼저 드래그해 주세요.");
+    alert("스티커 영역을 먼저 지정해 주세요.");
     return;
   }
 
@@ -1109,7 +1336,12 @@ async function submitInspection(){
     score:S.analysis.score,
     status:S.analysis.status,
     findings:S.analysis.findings,
-    metrics:S.analysis.metrics
+    metrics:{
+      ...S.analysis.metrics,
+      plateConfirmed:!!S.plateSelection,
+      plateVisibilityScore:Number(S.plateVisibility?.score||0),
+      plateCrop:S.plateSelection
+    }
   };
 
   const fd=new FormData();
@@ -1142,6 +1374,10 @@ function resetAllAfterPhoto(){
   S.analysis=null;
   S.photoHash=null;
   S.analyzedSelection=null;
+  S.plateSelection=null;
+  S.plateVisibility=null;
+  S.draftSelection=null;
+  S.selectionMode="sticker";
 }
 
 function defaultRules(){
