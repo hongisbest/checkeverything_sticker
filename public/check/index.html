@@ -171,8 +171,16 @@
   </div>
 
   <div class="submission-actions">
-    <button id="backToSelectionBtn" class="btn">영역 다시 확인</button>
-    <button id="submitBtn" class="btn primary">점검사진 제출</button>
+    <button id="backToSelectionBtn" class="btn" type="button">영역 다시 확인</button>
+    <button id="submitBtn" class="btn primary" type="button">점검사진 제출</button>
+  </div>
+
+  <div id="submitLiveStatus" class="submit-live-status hidden" role="status" aria-live="assertive">
+    <div class="submit-spinner" aria-hidden="true"></div>
+    <div>
+      <strong id="submitLiveTitle">제출 준비 중</strong>
+      <span id="submitLiveDetail">잠시만 기다려 주세요.</span>
+    </div>
   </div>
 
   <div id="submitMessage" class="message info">

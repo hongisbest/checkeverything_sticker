@@ -182,3 +182,17 @@ Backend / D1 / R2 / Admin / schema / wrangler는 변경하지 않았습니다.
 - 관리자 필터에 분석대기 추가
 - D1 schema 변경 없음
 - 기존 스티커/예시/점검결과 삭제 없음
+
+
+## V14 제출 안정성 검증
+- submit 버튼 type=button
+- submit click addEventListener 연결
+- submitInspection 전체가 try/catch/finally 내부 동작
+- pre-validation Canvas 오류도 사용자 화면에 표시
+- 중복제출 silent return 제거
+- XHR upload progress 연결
+- 최종 업로드 이미지 max 1800px 재압축
+- R2 업로드 실패 / D1 저장 실패 각각 JSON 오류 반환
+- 저장 성공 전 STEP 02 초기화 금지
+- raw inspection 저장 성공 뒤에만 background analysis 스케줄
+- D1 schema / R2 경로 / 기존 데이터 구조 변경 없음

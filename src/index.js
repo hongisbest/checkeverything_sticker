@@ -920,9 +920,17 @@ async function saveInspection(request, env) {
 
   const key = `sticker-compare/inspection/${Date.now()}-${crypto.randomUUID()}.jpg`;
 
-  await env.STORAGE.put(key,file.stream(),{
-    httpMetadata:{contentType:file.type || "image/jpeg"}
-  });
+  try {
+    await env.STORAGE.put(key,file.stream(),{
+      httpMetadata:{contentType:file.type || "image/jpeg"}
+    });
+  } catch (e) {
+    console.error("inspection R2 upload failed",e);
+    return j({
+      ok:false,
+      error:"점검사진 저장소 업로드에 실패했습니다. 잠시 후 다시 시도해 주세요."
+    },500);
+  }
 
   try {
     const inserted = await env.DB.prepare(`
@@ -968,8 +976,18 @@ async function saveInspection(request, env) {
       analysis_token:analysisToken
     });
   } catch (e) {
-    await env.STORAGE.delete(key);
-    throw e;
+    console.error("inspection D1 insert failed",e);
+
+    try{
+      await env.STORAGE.delete(key);
+    }catch(cleanupError){
+      console.error("inspection R2 cleanup failed",cleanupError);
+    }
+
+    return j({
+      ok:false,
+      error:"점검정보 저장에 실패했습니다. 잠시 후 다시 시도해 주세요."
+    },500);
   }
 }
 

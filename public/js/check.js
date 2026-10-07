@@ -43,7 +43,7 @@ function bind(){
   $("stickerMissingCheck").onchange=toggleMissing;
   $("analyzeBtn").onclick=openSubmissionReview;
   $("backToSelectionBtn").onclick=backToSelection;
-  $("submitBtn").onclick=submitInspection;
+  $("submitBtn").addEventListener("click",submitInspection);
 
   ["employeeName","employeeId","department","vehicleNo"].forEach(id=>{
     $(id).addEventListener("input",saveProfile);
@@ -1411,85 +1411,128 @@ function renderAnalysis(a){
   return a;
 }
 
-async function submitInspection(){
-  if(S.submitting)return;
-
-  if(!S.photoBlob||!S.sticker){
-    showSubmitError("점검사진을 먼저 촬영하거나 업로드해 주세요.");
-    return;
+async function submitInspection(event){
+  if(event){
+    event.preventDefault();
+    event.stopPropagation();
   }
 
-  const name=$("employeeName").value.trim();
-  const vehicle=$("vehicleNo").value.trim();
-  const missing=$("stickerMissingCheck").checked;
-
-  if(!name||!vehicle){
-    showSubmitError("성명과 차량번호를 입력해 주세요.");
-    return;
-  }
-
-  if(!S.plateSelection){
-    showSubmitError("번호판 영역이 지정되지 않았습니다. STEP 04에서 번호판을 다시 지정해 주세요.");
-    backToSelection();
-    return;
-  }
-
-  if(!missing&&!S.selection){
-    showSubmitError("스티커 영역이 지정되지 않았습니다. STEP 04에서 스티커를 다시 지정해 주세요.");
-    backToSelection();
-    return;
-  }
-
-  // Hard capture-quality validation happens BEFORE any server request.
-  const plateQuality=analyzeRegionVisibility(S.photoImage,S.plateSelection,"plate");
-
-  if(plateQuality.tooSmall||plateQuality.score<10){
-    showSubmitError(
-      "번호판 영역이 너무 작거나 흐려 확인하기 어렵습니다. 번호판이 더 크게 보이도록 영역을 다시 지정하거나 사진을 다시 촬영해 주세요."
+  // Never fail silently.
+  if(S.submitting){
+    showSubmitLive(
+      "이미 제출 중입니다.",
+      "현재 저장 요청이 진행 중입니다. 잠시만 기다려 주세요.",
+      "info"
     );
-    backToSelection();
     return;
   }
-
-  let stickerQuality={
-    score:100,width:0,height:0,tooSmall:false,lowDetail:false
-  };
-
-  if(!missing){
-    stickerQuality=analyzeRegionVisibility(S.photoImage,S.selection,"sticker");
-
-    if(stickerQuality.tooSmall||stickerQuality.score<10){
-      showSubmitError(
-        "스티커 영역이 제대로 지정되지 않았거나 너무 작게 촬영되었습니다. 홍보스티커 전체가 보이도록 영역을 다시 지정해 주세요."
-      );
-      backToSelection();
-      return;
-    }
-  }
-
-  // Snapshot everything required for the later hidden analysis.
-  // This allows the employee UI to reset immediately after the upload succeeds.
-  const analysisSnapshot={
-    sticker:S.sticker,
-    rules:S.rules||defaultRules(),
-    photoImage:S.photoImage,
-    selection:S.selection ? {...S.selection} : null,
-    plateSelection:{...S.plateSelection},
-    missing,
-    stickerQuality,
-    plateQuality
-  };
 
   S.submitting=true;
-  $("submitBtn").disabled=true;
-  $("backToSelectionBtn").disabled=true;
-  setSubmitMessage("사진과 점검정보를 먼저 저장하고 있습니다...","info");
 
-  // Force one paint before any network/analysis work.
-  await yieldToBrowser();
+  const submitBtn=$("submitBtn");
+  const backBtn=$("backToSelectionBtn");
+
+  submitBtn.disabled=true;
+  backBtn.disabled=true;
+  submitBtn.textContent="제출 확인 중...";
+
+  showSubmitLive(
+    "제출 내용을 확인하고 있습니다.",
+    "스티커와 번호판 영역을 확인합니다.",
+    "info"
+  );
 
   try{
-    // Important: no automatic image analysis runs before this POST.
+    if(!S.photoBlob||!S.photoImage||!S.sticker){
+      throw new UserSubmitError("점검사진을 먼저 촬영하거나 업로드해 주세요.","selection");
+    }
+
+    const name=$("employeeName").value.trim();
+    const vehicle=$("vehicleNo").value.trim();
+    const missing=$("stickerMissingCheck").checked;
+
+    if(!name||!vehicle){
+      throw new UserSubmitError("성명과 차량번호를 입력해 주세요.","profile");
+    }
+
+    if(!S.plateSelection){
+      throw new UserSubmitError(
+        "번호판 영역이 지정되지 않았습니다. STEP 04에서 번호판을 다시 지정해 주세요.",
+        "selection"
+      );
+    }
+
+    if(!missing&&!S.selection){
+      throw new UserSubmitError(
+        "스티커 영역이 지정되지 않았습니다. STEP 04에서 홍보스티커를 다시 지정해 주세요.",
+        "selection"
+      );
+    }
+
+    // All canvas/image validation is now inside the try/catch.
+    const plateQuality=analyzeRegionVisibility(
+      S.photoImage,
+      S.plateSelection,
+      "plate"
+    );
+
+    if(plateQuality.tooSmall||plateQuality.score<10){
+      throw new UserSubmitError(
+        "번호판 영역이 너무 작거나 흐려 확인하기 어렵습니다. 번호판이 더 크게 보이도록 영역을 다시 지정하거나 사진을 다시 촬영해 주세요.",
+        "selection"
+      );
+    }
+
+    let stickerQuality={
+      score:100,
+      width:0,
+      height:0,
+      tooSmall:false,
+      lowDetail:false
+    };
+
+    if(!missing){
+      stickerQuality=analyzeRegionVisibility(
+        S.photoImage,
+        S.selection,
+        "sticker"
+      );
+
+      if(stickerQuality.tooSmall||stickerQuality.score<10){
+        throw new UserSubmitError(
+          "스티커 영역이 제대로 지정되지 않았거나 너무 작게 촬영되었습니다. 홍보스티커 전체가 보이도록 영역을 다시 지정해 주세요.",
+          "selection"
+        );
+      }
+    }
+
+    // Snapshot for admin-only analysis after the raw data has been stored.
+    const analysisSnapshot={
+      sticker:S.sticker,
+      rules:S.rules||defaultRules(),
+      photoImage:S.photoImage,
+      selection:S.selection ? {...S.selection} : null,
+      plateSelection:{...S.plateSelection},
+      missing,
+      stickerQuality,
+      plateQuality
+    };
+
+    showSubmitLive(
+      "사진을 서버에 저장하고 있습니다.",
+      "업로드 준비 중 · 페이지를 닫지 마세요.",
+      "info"
+    );
+    submitBtn.textContent="사진 준비 중...";
+
+    // Normalize the upload image once more so camera photos cannot become
+    // unexpectedly huge on iPhone/high-resolution devices.
+    const uploadBlob=await compressBlobImage(
+      S.photoBlob,
+      1800,
+      .86
+    );
+
     const pendingMetrics={
       userAnalysisHidden:true,
       analysisPending:true,
@@ -1501,7 +1544,12 @@ async function submitInspection(){
       userStickerCrop:S.selection
     };
 
-    const selected=S.selection||{x:0,y:0,width:1,height:1};
+    const selected=S.selection||{
+      x:0,
+      y:0,
+      width:1,
+      height:1
+    };
 
     const meta={
       employee_name:name,
@@ -1522,47 +1570,224 @@ async function submitInspection(){
 
     const fd=new FormData();
     fd.append("meta",JSON.stringify(meta));
-    fd.append("file",S.photoBlob,"inspection.jpg");
+    fd.append("file",uploadBlob,"inspection.jpg");
 
-    const r=await fetchTimeout("/api/inspection",{
-      method:"POST",
-      body:fd
-    },30000);
+    submitBtn.textContent="업로드 중...";
 
-    const d=await safeJson(r);
+    const d=await uploadInspectionWithProgress(fd,(percent)=>{
+      submitBtn.textContent=`업로드 ${percent}%`;
+      showSubmitLive(
+        "사진을 서버에 저장하고 있습니다.",
+        `업로드 ${percent}% · 완료될 때까지 잠시만 기다려 주세요.`,
+        "info"
+      );
+    });
 
-    if(!r.ok||!d?.ok){
-      throw new Error(d?.error||`저장 실패 (${r.status})`);
+    if(!d?.ok||!Number(d.id)){
+      throw new Error(d?.error||"서버에서 접수번호를 받지 못했습니다.");
     }
 
     const inspectionId=Number(d.id);
     const analysisToken=String(d.analysis_token||"");
 
-    // Employee gets success as soon as the raw inspection data is safely stored.
+    // This is the important completion point:
+    // raw DB/R2 data is already stored before any auto analysis starts.
+    submitBtn.textContent="제출 완료";
+
+    showSubmitLive(
+      "제출이 완료되었습니다.",
+      `접수번호 #${inspectionId} · 관리자가 점검결과를 확인합니다.`,
+      "success"
+    );
+
     setSubmitMessage(
       `제출이 완료되었습니다. 접수번호 #${inspectionId} · 관리자가 점검결과를 확인합니다.`,
       "success"
     );
 
-    alert(
-      `제출이 완료되었습니다.\n접수번호 #${inspectionId}\n\n관리자가 점검결과를 확인합니다.`
-    );
+    // Keep the success message on screen briefly; no blocking alert needed.
+    await waitMs(900);
 
     resetAfterSuccessfulSubmit();
 
-    // Run admin-only analysis later and never block the employee submission.
-    scheduleBackgroundAnalysis(inspectionId,analysisToken,analysisSnapshot);
+    // Analysis is best-effort only. It can never undo the raw submission.
+    scheduleBackgroundAnalysis(
+      inspectionId,
+      analysisToken,
+      analysisSnapshot
+    );
 
   }catch(e){
     console.error("inspection submit failed",e);
-    showSubmitError(
-      `제출에 실패했습니다. ${e?.message||"네트워크 상태를 확인한 뒤 다시 시도해 주세요."}`
+
+    const message=e instanceof UserSubmitError
+      ? e.message
+      : `제출에 실패했습니다. ${humanSubmitError(e)}`;
+
+    showSubmitLive(
+      "제출하지 못했습니다.",
+      message,
+      "error"
     );
-    $("submitBtn").disabled=false;
-    $("backToSelectionBtn").disabled=false;
+
+    setSubmitMessage(message,"error");
+
+    // Visible feedback without relying only on alert().
+    submitBtn.textContent="다시 제출";
+    submitBtn.disabled=false;
+    backBtn.disabled=false;
+
+    if(e instanceof UserSubmitError){
+      if(e.target==="selection"){
+        $("submissionSection").classList.add("hidden");
+        $("selectionSection").classList.remove("hidden");
+        $("selectionSection").scrollIntoView({
+          behavior:"smooth",
+          block:"start"
+        });
+      }else if(e.target==="profile"){
+        window.scrollTo({top:0,behavior:"smooth"});
+      }
+    }
   }finally{
     S.submitting=false;
+
+    if(submitBtn.textContent!=="제출 완료"&&submitBtn.disabled){
+      submitBtn.disabled=false;
+    }
+
+    if(backBtn.disabled){
+      backBtn.disabled=false;
+    }
   }
+}
+
+class UserSubmitError extends Error{
+  constructor(message,target=""){
+    super(message);
+    this.name="UserSubmitError";
+    this.target=target;
+  }
+}
+
+function showSubmitLive(title,detail,type="info"){
+  const box=$("submitLiveStatus");
+
+  if(!box)return;
+
+  box.classList.remove("hidden","success","error","info");
+  box.classList.add(type);
+
+  $("submitLiveTitle").textContent=title;
+  $("submitLiveDetail").textContent=detail;
+}
+
+function hideSubmitLive(){
+  const box=$("submitLiveStatus");
+  if(box)box.classList.add("hidden");
+}
+
+function humanSubmitError(error){
+  if(!error)return "네트워크 상태를 확인한 뒤 다시 시도해 주세요.";
+
+  if(error.name==="AbortError"){
+    return "서버 응답시간을 초과했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.";
+  }
+
+  const message=String(error.message||"").trim();
+
+  if(!message){
+    return "네트워크 상태를 확인한 뒤 다시 시도해 주세요.";
+  }
+
+  return message;
+}
+
+function waitMs(ms){
+  return new Promise(resolve=>setTimeout(resolve,ms));
+}
+
+async function compressBlobImage(blob,maxSide,quality){
+  const img=await blobImage(blob);
+  const scale=Math.min(
+    1,
+    maxSide/Math.max(img.naturalWidth,img.naturalHeight)
+  );
+
+  const c=document.createElement("canvas");
+  c.width=Math.max(1,Math.round(img.naturalWidth*scale));
+  c.height=Math.max(1,Math.round(img.naturalHeight*scale));
+
+  c.getContext("2d").drawImage(
+    img,
+    0,0,
+    c.width,c.height
+  );
+
+  return canvasBlob(c,quality);
+}
+
+function uploadInspectionWithProgress(formData,onProgress){
+  return new Promise((resolve,reject)=>{
+    const xhr=new XMLHttpRequest();
+
+    xhr.open("POST","/api/inspection",true);
+    xhr.timeout=45000;
+
+    xhr.upload.onprogress=e=>{
+      if(!e.lengthComputable)return;
+
+      const percent=Math.max(
+        1,
+        Math.min(99,Math.round(e.loaded/e.total*100))
+      );
+
+      if(onProgress)onProgress(percent);
+    };
+
+    xhr.onload=()=>{
+      let data=null;
+
+      try{
+        data=JSON.parse(xhr.responseText||"{}");
+      }catch{}
+
+      if(xhr.status>=200&&xhr.status<300){
+        if(onProgress)onProgress(100);
+        resolve(data||{ok:true});
+        return;
+      }
+
+      reject(
+        new Error(
+          data?.error||
+          `서버 저장 실패 (${xhr.status})`
+        )
+      );
+    };
+
+    xhr.onerror=()=>{
+      reject(
+        new Error(
+          "서버에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요."
+        )
+      );
+    };
+
+    xhr.ontimeout=()=>{
+      reject(
+        new Error(
+          "사진 업로드 시간이 초과되었습니다. 네트워크를 확인한 뒤 다시 시도해 주세요."
+        )
+      );
+    };
+
+    xhr.onabort=()=>{
+      reject(new Error("사진 업로드가 중단되었습니다."));
+    };
+
+    xhr.send(formData);
+  });
 }
 
 function showSubmitError(message){
@@ -1616,6 +1841,14 @@ function resetAfterSuccessfulSubmit(){
   if(target){
     target.scrollIntoView({behavior:"smooth",block:"start"});
   }
+
+  setTimeout(()=>{
+    hideSubmitLive();
+    setSubmitMessage(
+      "새 점검을 진행할 수 있습니다.",
+      "info"
+    );
+  },1200);
 }
 
 function scheduleBackgroundAnalysis(id,token,snapshot){
