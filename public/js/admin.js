@@ -806,7 +806,9 @@ async function loadInspections(){
                   <strong>${esc(x.vehicle_no)} · ${esc(x.employee_name)}</strong>
                   <span>${esc(x.department||"-")} · ${esc(x.sticker_name||"-")} v${esc(x.sticker_version||"-")}</span>
                   <span>점수 ${Number(x.score).toFixed(1)} · <b>${esc(x.status)}</b></span>
-                  <span>구조 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%</span>
+                  <span>${x.status==="분석대기"
+                    ? "자동분석 대기 중 · 사진과 선택영역은 저장 완료"
+                    : `구조 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`}</span>
                   <span>${metrics.plateConfirmed===true
                     ? `번호판 확인 ✓ · 노출점수 ${Number(metrics.plateVisibilityScore??0).toFixed(1)}`
                     : "번호판 확인정보 없음"}</span>

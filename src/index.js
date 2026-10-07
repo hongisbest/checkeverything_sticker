@@ -129,6 +129,11 @@ async function api(request, env, url) {
   if (p === "/api/analysis-cache" && request.method === "POST") return saveAnalysisCache(request, env);
   if (p === "/api/inspection" && request.method === "POST") return saveInspection(request, env);
 
+  const inspectionAnalysis = p.match(/^\/api\/inspection\/(\d+)\/analysis$/);
+  if (inspectionAnalysis && request.method === "PATCH") {
+    return updateSubmittedInspectionAnalysis(request, env, Number(inspectionAnalysis[1]));
+  }
+
   const stickerImage = p.match(/^\/api\/sticker\/(\d+)\/image$/);
   if (stickerImage && request.method === "GET") {
     return getStickerImage(env, Number(stickerImage[1]));
@@ -940,16 +945,84 @@ async function saveInspection(request, env) {
       Number(meta.crop_height)||1,
       meta.sticker_missing ? 1 : 0,
       Math.max(0,Math.min(100,Number(meta.score)||0)),
-      meta.status==="정상" ? "정상" : (meta.status==="판정불가" ? "판정불가" : "확인필요"),
+      meta.status==="정상"
+        ? "정상"
+        : (meta.status==="판정불가"
+            ? "판정불가"
+            : (meta.status==="분석대기" ? "분석대기" : "확인필요")),
       JSON.stringify(Array.isArray(meta.findings) ? meta.findings.slice(0,30) : []),
       JSON.stringify(meta.metrics && typeof meta.metrics==="object" ? meta.metrics : {})
     ).first();
 
-    return j({ok:true,id:inserted?.id});
+    let analysisToken="";
+    if (inserted?.id && env.ADMIN_SESSION_SECRET) {
+      analysisToken=await sign(
+        `inspection-analysis:${inserted.id}:${key}`,
+        env.ADMIN_SESSION_SECRET
+      );
+    }
+
+    return j({
+      ok:true,
+      id:inserted?.id,
+      analysis_token:analysisToken
+    });
   } catch (e) {
     await env.STORAGE.delete(key);
     throw e;
   }
+}
+
+
+async function updateSubmittedInspectionAnalysis(request, env, id) {
+  if (!Number.isInteger(id) || id<=0) {
+    return j({ok:false,error:"점검번호가 올바르지 않습니다."},400);
+  }
+
+  if (!env.ADMIN_SESSION_SECRET) {
+    return j({ok:false,error:"분석결과 저장용 Secret이 설정되지 않았습니다."},503);
+  }
+
+  const row=await env.DB.prepare(`
+    SELECT id,photo_object_key
+    FROM st_inspections
+    WHERE id=?
+  `).bind(id).first();
+
+  if (!row) return j({ok:false,error:"점검결과를 찾을 수 없습니다."},404);
+
+  const token=String(request.headers.get("x-analysis-token") || "");
+  const expected=await sign(
+    `inspection-analysis:${id}:${row.photo_object_key}`,
+    env.ADMIN_SESSION_SECRET
+  );
+
+  if (!token || !safeEqual(token,expected)) {
+    return j({ok:false,error:"분석결과 저장 권한이 없습니다."},403);
+  }
+
+  const body=await request.json().catch(()=>({}));
+  const status=["정상","확인필요","판정불가"].includes(body.status)
+    ? body.status
+    : "판정불가";
+
+  const score=Math.max(0,Math.min(100,Number(body.score)||0));
+  const findings=Array.isArray(body.findings) ? body.findings.slice(0,30) : [];
+  const metrics=body.metrics && typeof body.metrics==="object" ? body.metrics : {};
+
+  await env.DB.prepare(`
+    UPDATE st_inspections
+    SET score=?,status=?,findings_json=?,metrics_json=?
+    WHERE id=?
+  `).bind(
+    score,
+    status,
+    JSON.stringify(findings),
+    JSON.stringify(metrics),
+    id
+  ).run();
+
+  return j({ok:true,id,status});
 }
 
 async function listInspections(env, url) {

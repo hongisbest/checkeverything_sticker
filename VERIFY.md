@@ -170,3 +170,15 @@ Backend / D1 / R2 / Admin / schema / wrangler는 변경하지 않았습니다.
 - 관리자 점검결과의 자동판정 표시 유지
 - V9 사용자 가이드 ROI 위치보정 유지
 - Worker / schema / wrangler / R2 구조 변경 없음
+
+
+## V13 제출 안정성 검증
+- /api/inspection POST가 자동분석보다 먼저 실행됨
+- 초기 저장 status = 분석대기
+- 저장 성공 후 alert + 접수번호 + STEP 02 복귀
+- 스티커/번호판 hard quality validation 추가
+- 분석결과 업데이트는 HMAC 서명 토큰 필요
+- 자동분석 실패해도 초기 st_inspections / R2 사진 유지
+- 관리자 필터에 분석대기 추가
+- D1 schema 변경 없음
+- 기존 스티커/예시/점검결과 삭제 없음

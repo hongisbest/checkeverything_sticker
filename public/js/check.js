@@ -17,7 +17,8 @@ const S={
   plateSelection:null,
   selectionMode:"sticker",
   draftSelection:null,
-  plateVisibility:null
+  plateVisibility:null,
+  submitting:false
 };
 
 document.addEventListener("DOMContentLoaded",()=>{
@@ -1411,8 +1412,10 @@ function renderAnalysis(a){
 }
 
 async function submitInspection(){
+  if(S.submitting)return;
+
   if(!S.photoBlob||!S.sticker){
-    setSubmitMessage("점검사진을 먼저 준비해 주세요.","error");
+    showSubmitError("점검사진을 먼저 촬영하거나 업로드해 주세요.");
     return;
   }
 
@@ -1421,36 +1424,84 @@ async function submitInspection(){
   const missing=$("stickerMissingCheck").checked;
 
   if(!name||!vehicle){
-    setSubmitMessage("성명과 차량번호를 입력해 주세요.","error");
+    showSubmitError("성명과 차량번호를 입력해 주세요.");
     return;
   }
 
   if(!S.plateSelection){
-    setSubmitMessage("번호판 영역을 먼저 지정해 주세요.","error");
+    showSubmitError("번호판 영역이 지정되지 않았습니다. STEP 04에서 번호판을 다시 지정해 주세요.");
+    backToSelection();
     return;
   }
 
   if(!missing&&!S.selection){
-    setSubmitMessage("스티커 영역을 먼저 지정해 주세요.","error");
+    showSubmitError("스티커 영역이 지정되지 않았습니다. STEP 04에서 스티커를 다시 지정해 주세요.");
+    backToSelection();
     return;
   }
 
+  // Hard capture-quality validation happens BEFORE any server request.
+  const plateQuality=analyzeRegionVisibility(S.photoImage,S.plateSelection,"plate");
+
+  if(plateQuality.tooSmall||plateQuality.score<10){
+    showSubmitError(
+      "번호판 영역이 너무 작거나 흐려 확인하기 어렵습니다. 번호판이 더 크게 보이도록 영역을 다시 지정하거나 사진을 다시 촬영해 주세요."
+    );
+    backToSelection();
+    return;
+  }
+
+  let stickerQuality={
+    score:100,width:0,height:0,tooSmall:false,lowDetail:false
+  };
+
+  if(!missing){
+    stickerQuality=analyzeRegionVisibility(S.photoImage,S.selection,"sticker");
+
+    if(stickerQuality.tooSmall||stickerQuality.score<10){
+      showSubmitError(
+        "스티커 영역이 제대로 지정되지 않았거나 너무 작게 촬영되었습니다. 홍보스티커 전체가 보이도록 영역을 다시 지정해 주세요."
+      );
+      backToSelection();
+      return;
+    }
+  }
+
+  // Snapshot everything required for the later hidden analysis.
+  // This allows the employee UI to reset immediately after the upload succeeds.
+  const analysisSnapshot={
+    sticker:S.sticker,
+    rules:S.rules||defaultRules(),
+    photoImage:S.photoImage,
+    selection:S.selection ? {...S.selection} : null,
+    plateSelection:{...S.plateSelection},
+    missing,
+    stickerQuality,
+    plateQuality
+  };
+
+  S.submitting=true;
   $("submitBtn").disabled=true;
   $("backToSelectionBtn").disabled=true;
-  setSubmitMessage("점검사진을 제출하고 있습니다...","info");
+  setSubmitMessage("사진과 점검정보를 먼저 저장하고 있습니다...","info");
+
+  // Force one paint before any network/analysis work.
+  await yieldToBrowser();
 
   try{
-    // The analysis is computed only for the admin record.
-    // No result values are rendered to the employee UI.
-    await buildAdminOnlyAnalysis();
+    // Important: no automatic image analysis runs before this POST.
+    const pendingMetrics={
+      userAnalysisHidden:true,
+      analysisPending:true,
+      stickerCaptureQuality:stickerQuality,
+      plateConfirmed:true,
+      plateVisibilityScore:Number(plateQuality.score||0),
+      plateCaptureQuality:plateQuality,
+      plateCrop:S.plateSelection,
+      userStickerCrop:S.selection
+    };
 
-    const s=S.analyzedSelection||S.selection||{x:0,y:0,width:1,height:1};
-
-    const stickerQuality=missing
-      ? {score:100,width:0,height:0,tooSmall:false,lowDetail:false}
-      : analyzeRegionVisibility(S.photoImage,S.selection,"sticker");
-
-    const plateQuality=analyzeRegionVisibility(S.photoImage,S.plateSelection,"plate");
+    const selected=S.selection||{x:0,y:0,width:1,height:1};
 
     const meta={
       employee_name:name,
@@ -1458,47 +1509,438 @@ async function submitInspection(){
       department:$("department").value.trim(),
       vehicle_no:vehicle,
       sticker_id:S.sticker.id,
-      crop_x:s.x,
-      crop_y:s.y,
-      crop_width:s.width,
-      crop_height:s.height,
+      crop_x:selected.x,
+      crop_y:selected.y,
+      crop_width:selected.width,
+      crop_height:selected.height,
       sticker_missing:missing,
-      score:S.analysis.score,
-      status:S.analysis.status,
-      findings:S.analysis.findings,
-      metrics:{
-        ...S.analysis.metrics,
-        userAnalysisHidden:true,
-        stickerCaptureQuality:stickerQuality,
-        plateConfirmed:true,
-        plateVisibilityScore:Number(plateQuality.score||0),
-        plateCaptureQuality:plateQuality,
-        plateCrop:S.plateSelection,
-        userStickerCrop:S.selection
-      }
+      score:0,
+      status:"분석대기",
+      findings:["점검사진 접수 완료 · 관리자용 자동분석 대기"],
+      metrics:pendingMetrics
     };
 
     const fd=new FormData();
     fd.append("meta",JSON.stringify(meta));
     fd.append("file",S.photoBlob,"inspection.jpg");
 
-    const r=await fetchTimeout("/api/inspection",{method:"POST",body:fd},30000);
-    const d=await r.json();
+    const r=await fetchTimeout("/api/inspection",{
+      method:"POST",
+      body:fd
+    },30000);
 
-    if(!r.ok)throw new Error(d.error||"저장 실패");
+    const d=await safeJson(r);
 
-    setSubmitMessage(`제출 완료 · 접수번호 #${d.id} · 관리자가 점검결과를 확인합니다.`,"success");
-    $("submitBtn").textContent="제출 완료";
+    if(!r.ok||!d?.ok){
+      throw new Error(d?.error||`저장 실패 (${r.status})`);
+    }
+
+    const inspectionId=Number(d.id);
+    const analysisToken=String(d.analysis_token||"");
+
+    // Employee gets success as soon as the raw inspection data is safely stored.
+    setSubmitMessage(
+      `제출이 완료되었습니다. 접수번호 #${inspectionId} · 관리자가 점검결과를 확인합니다.`,
+      "success"
+    );
+
+    alert(
+      `제출이 완료되었습니다.\n접수번호 #${inspectionId}\n\n관리자가 점검결과를 확인합니다.`
+    );
+
+    resetAfterSuccessfulSubmit();
+
+    // Run admin-only analysis later and never block the employee submission.
+    scheduleBackgroundAnalysis(inspectionId,analysisToken,analysisSnapshot);
+
   }catch(e){
-    setSubmitMessage(`${e.message} 다시 시도해 주세요.`,"error");
+    console.error("inspection submit failed",e);
+    showSubmitError(
+      `제출에 실패했습니다. ${e?.message||"네트워크 상태를 확인한 뒤 다시 시도해 주세요."}`
+    );
     $("submitBtn").disabled=false;
     $("backToSelectionBtn").disabled=false;
+  }finally{
+    S.submitting=false;
+  }
+}
+
+function showSubmitError(message){
+  setSubmitMessage(message,"error");
+  alert(message);
+}
+
+function resetAfterSuccessfulSubmit(){
+  stopCamera();
+
+  if(S.photoUrl){
+    URL.revokeObjectURL(S.photoUrl);
+  }
+
+  S.photoUrl=null;
+  S.photoBlob=null;
+  S.photoImage=null;
+  S.selection=null;
+  S.plateSelection=null;
+  S.plateVisibility=null;
+  S.draftSelection=null;
+  S.analyzedSelection=null;
+  S.analysis=null;
+  S.photoHash=null;
+  S.selectionMode="sticker";
+
+  $("selectionSection").classList.add("hidden");
+  $("submissionSection").classList.add("hidden");
+  $("photoInput").value="";
+  $("selectionImage").removeAttribute("src");
+
+  $("stickerMissingCheck").checked=false;
+  $("stickerSelectionBox").classList.add("hidden");
+  $("plateSelectionBox").classList.add("hidden");
+  $("draftSelectionBox").classList.add("hidden");
+
+  $("stickerSelectionState").textContent="스티커 미지정";
+  $("stickerSelectionState").className="pill review";
+  $("plateSelectionState").textContent="번호판 미지정";
+  $("plateSelectionState").className="pill review";
+
+  $("submitBtn").disabled=false;
+  $("backToSelectionBtn").disabled=false;
+  $("submitBtn").textContent="점검사진 제출";
+
+  $("cameraStatus").textContent="대기";
+  $("cameraVideo").style.display="none";
+  $("cameraPlaceholder").style.display="flex";
+
+  const target=$("stickerGuideSection");
+  if(target){
+    target.scrollIntoView({behavior:"smooth",block:"start"});
+  }
+}
+
+function scheduleBackgroundAnalysis(id,token,snapshot){
+  if(!id||!token||!snapshot)return;
+
+  const runner=()=>runBackgroundAdminAnalysis(id,token,snapshot)
+    .catch(e=>console.warn("background admin analysis failed",e));
+
+  if("requestIdleCallback" in window){
+    requestIdleCallback(runner,{timeout:3500});
+  }else{
+    setTimeout(runner,1200);
+  }
+}
+
+async function runBackgroundAdminAnalysis(id,token,snapshot){
+  // Yield before doing CPU work so the employee success UI/reset finishes first.
+  await yieldToBrowser();
+
+  const analysis=await buildSnapshotAnalysis(snapshot);
+
+  const metrics={
+    ...analysis.metrics,
+    userAnalysisHidden:true,
+    analysisPending:false,
+    stickerCaptureQuality:snapshot.stickerQuality,
+    plateConfirmed:true,
+    plateVisibilityScore:Number(snapshot.plateQuality?.score||0),
+    plateCaptureQuality:snapshot.plateQuality,
+    plateCrop:snapshot.plateSelection,
+    userStickerCrop:snapshot.selection
+  };
+
+  const r=await fetchTimeout(`/api/inspection/${id}/analysis`,{
+    method:"PATCH",
+    headers:{
+      "content-type":"application/json",
+      "x-analysis-token":token
+    },
+    body:JSON.stringify({
+      score:analysis.score,
+      status:analysis.status,
+      findings:analysis.findings,
+      metrics
+    })
+  },30000);
+
+  if(!r.ok){
+    const d=await safeJson(r);
+    throw new Error(d?.error||`분석결과 저장 실패 (${r.status})`);
+  }
+}
+
+async function buildSnapshotAnalysis(snapshot){
+  if(snapshot.missing){
+    return{
+      score:0,
+      status:"확인필요",
+      recommendation:"교체 권고",
+      findings:[
+        "스티커가 확인되지 않음",
+        "구조 손상지수 100%",
+        "교체 권고"
+      ],
+      metrics:{
+        damage:100,
+        shape:0,
+        color:100,
+        confidence:100,
+        missing:true
+      }
+    };
+  }
+
+  const calibrated=(snapshot.sticker.examples||[]).filter(x=>x.calibrated);
+
+  if(!calibrated.length){
+    return{
+      score:0,
+      status:"판정불가",
+      recommendation:"",
+      findings:[
+        "정상부착 예시사진의 스티커 영역 캘리브레이션이 없어 자동판정을 수행하지 못했습니다."
+      ],
+      metrics:{
+        damage:0,
+        shape:0,
+        color:0,
+        confidence:0,
+        missing:false,
+        analysisError:false
+      }
+    };
+  }
+
+  try{
+    const result=await analyzeSnapshotAgainstMasterAndExamples(snapshot,calibrated);
+    return result.analysis;
+  }catch(e){
+    console.error("snapshot analysis error",e);
+
+    return{
+      score:0,
+      status:"판정불가",
+      recommendation:"",
+      findings:[
+        "자동 분석 중 오류가 발생했습니다. 관리자가 원본 사진과 선택영역을 직접 확인해 주세요."
+      ],
+      metrics:{
+        damage:0,
+        shape:0,
+        color:0,
+        confidence:0,
+        missing:false,
+        analysisError:true
+      }
+    };
+  }
+}
+
+async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
+  const master=await loadImage(snapshot.sticker.image_url);
+  const masterDescriptor=buildMasterDescriptor(master);
+  const normalComparisons=[];
+
+  for(let i=0;i<examples.length;i++){
+    const ex=examples[i];
+    const img=await loadImage(ex.image_url);
+
+    const crop=cropImageElement(img,{
+      x:Number(ex.crop_x),
+      y:Number(ex.crop_y),
+      width:Number(ex.crop_width),
+      height:Number(ex.crop_height)
+    },1000);
+
+    const cmp=await compareNormalizedStructureResponsive(masterDescriptor,crop);
+    normalComparisons.push(cmp);
+
+    await yieldToBrowser();
+  }
+
+  const calibration=buildCalibration(masterDescriptor,normalComparisons);
+
+  const base=stabilizeSelection(
+    snapshot.selection,
+    snapshot.photoImage.naturalWidth,
+    snapshot.photoImage.naturalHeight,
+    master.naturalWidth/Math.max(1,master.naturalHeight)
+  );
+
+  const candidates=selectionSearchVariants(base);
+  let best=null;
+
+  for(let i=0;i<candidates.length;i++){
+    const box=candidates[i];
+    const canvas=cropBoxCanvas(snapshot.photoImage,box,1100);
+    const cmp=await compareNormalizedStructureResponsive(masterDescriptor,canvas);
+    const relative=relativeStructureScore(cmp.sims,calibration);
+
+    if(!best||relative>best.relative){
+      best={box,cmp,relative};
+    }
+
+    await yieldToBrowser();
+  }
+
+  if(!best){
+    throw new Error("스티커 비교영역을 계산하지 못했습니다.");
+  }
+
+  const damage=calibratedDamageIndex(best.cmp.sims,calibration);
+  const preservation=calibratedPreservation(best.cmp.sims,calibration);
+  const baselineGlobal=median(normalComparisons.map(x=>x.global));
+
+  const confidence=r1(clamp(
+    best.cmp.global/Math.max(.05,baselineGlobal)*100,
+    0,100
+  ));
+
+  const color=calibratedColorDifference(best.cmp.colorVector,normalComparisons);
+
+  const metrics={
+    damage:r1(damage),
+    shape:r1(preservation),
+    color:r1(color),
+    confidence,
+    baselineGlobal:r1(baselineGlobal*100),
+    stableCells:calibration.stableIndices.length,
+    normalExamples:normalComparisons.length,
+    missing:false
+  };
+
+  const rules=snapshot.rules||defaultRules();
+  let status="정상";
+  let recommendation="";
+  const findings=[];
+
+  if(confidence<62||calibration.stableIndices.length<12){
+    status="판정불가";
+    findings.push(
+      "스티커 구조 검출신뢰도가 낮아 손상으로 판정하지 않았습니다. 관리자가 원본 사진과 선택영역을 확인해 주세요."
+    );
+  }else{
+    if(Number(rules.use_damage)===1){
+      if(metrics.damage>=Number(rules.damage_replace_min)){
+        status="확인필요";
+        recommendation="교체 권고";
+        findings.push(`구조 손상지수 ${metrics.damage}% → 교체 권고`);
+      }else if(metrics.damage>Number(rules.damage_normal_max)){
+        status="확인필요";
+        findings.push(`구조 손상지수 ${metrics.damage}% → 확인필요`);
+      }
+    }
+
+    if(Number(rules.use_shape)===1&&metrics.shape<Number(rules.shape_similarity_min)){
+      status="확인필요";
+      findings.push(`구조 보존율 ${metrics.shape}% → 로고·문구·그래픽 확인필요`);
+    }
+
+    if(Number(rules.use_color)===1&&metrics.color>Number(rules.color_difference_max)){
+      status="확인필요";
+      findings.push(`정상부착 예시 대비 색상차이 ${metrics.color} → 변색·오염 확인필요`);
+    }
+
+    if(!findings.length){
+      findings.push(
+        "정상부착 예시의 정상변동 범위 안에서 스티커 구조가 보존되어 있습니다."
+      );
+    }
+  }
+
+  const score=status==="판정불가"
+    ? r1(confidence*.5)
+    : r1(clamp(
+        (100-metrics.damage)*.50+
+        metrics.shape*.35+
+        confidence*.10+
+        (100-Math.min(100,metrics.color))*.05,
+        0,100
+      ));
+
+  return{
+    crop:best.box,
+    analysis:{
+      score,
+      status,
+      recommendation,
+      findings,
+      metrics
+    }
+  };
+}
+
+async function compareNormalizedStructureResponsive(masterDescriptor,imageOrCanvas){
+  const canvas=imageOrCanvas instanceof HTMLCanvasElement
+    ? fitCanvasToSize(imageOrCanvas,masterDescriptor.W,masterDescriptor.H)
+    : fitImageCanvas(imageOrCanvas,masterDescriptor.W,masterDescriptor.H);
+
+  let best=null;
+  let iteration=0;
+
+  const scales=[.92,1,1.08];
+  const shifts=[-8,0,8];
+
+  for(const sx of scales){
+    for(const sy of scales){
+      for(const tx of shifts){
+        for(const ty of shifts){
+          const transformed=transformCanvas(
+            canvas,
+            masterDescriptor.W,
+            masterDescriptor.H,
+            sx,sy,tx,ty
+          );
+
+          const hog=hogGridFromCanvas(
+            transformed,
+            masterDescriptor.CELL,
+            masterDescriptor.BINS
+          );
+
+          const result=hogSimilarity(
+            masterDescriptor.hog,
+            hog,
+            masterDescriptor.informative
+          );
+
+          if(!best||result.weightedMean>best.global){
+            best={
+              sims:Array.from(result.sims),
+              global:result.weightedMean,
+              canvas:transformed,
+              colorVector:dominantChromaticVector(transformed)
+            };
+          }
+
+          iteration++;
+          if(iteration%9===0){
+            await yieldToBrowser();
+          }
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
+function yieldToBrowser(){
+  return new Promise(resolve=>setTimeout(resolve,0));
+}
+
+async function safeJson(response){
+  try{
+    return await response.json();
+  }catch{
+    return null;
   }
 }
 
 function resetAllAfterPhoto(){
   $("selectionSection").classList.add("hidden");
   $("analysisSection").classList.add("hidden");
+  if($("submissionSection"))$("submissionSection").classList.add("hidden");
   S.photoBlob=null;
   S.photoImage=null;
   S.selection=null;

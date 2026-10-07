@@ -582,3 +582,9 @@ body.modal-open{overflow:hidden}
     grid-template-columns:1fr;
   }
 }
+/* ===== V13 submit-first feedback ===== */
+.message.error{
+  border-color:#fecaca;
+  background:#fff1f2;
+  color:#b42318;
+}
