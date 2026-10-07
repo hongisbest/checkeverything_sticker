@@ -780,7 +780,7 @@ function updateRuleSummary(){
   }
 
   if(r.use_design){
-    parts.push(`디자인 동일성 ${r.design_similarity_min}% 미만 확인필요`);
+    parts.push(`디자인 동일성 정상예시 기반 자동기준 (예시 부족 시 ${r.design_similarity_min}% 사용)`);
   }
 
   if(r.use_placement){
@@ -925,7 +925,7 @@ async function loadInspections(){
                   <span>점수 ${Number(x.score).toFixed(1)} · <b>${esc(x.status)}</b></span>
                   <span>${x.status==="분석대기"
                     ? "자동분석 대기 중 · 사진과 선택영역은 저장 완료"
-                    : `보정 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 동일성 ${Number(metrics.designSimilarity??0).toFixed(1)}% · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`}</span>
+                    : `보정 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 동일성 ${Number(metrics.designSimilarity??0).toFixed(1)}% (기준 ${Number(metrics.designThreshold??0).toFixed(1)}%) · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`}</span>
                   <span>${Number.isFinite(Number(metrics.placementSimilarity))
                     ? `부착위치 유사도 ${Number(metrics.placementSimilarity).toFixed(1)}%`
                     : "부착위치 기준 미설정"}</span>
@@ -1188,8 +1188,8 @@ function fetchTimeout(url,opts={},ms=20000){
 function sideLabel(v){
   return({
     both:"좌·우 측면 공통",
-    driver:"운전석 측면",
-    passenger:"조수석 측면",
+    driver:"운전석",
+    passenger:"조수석",
     rear:"후면",
     front:"전면"
   })[v]||v;

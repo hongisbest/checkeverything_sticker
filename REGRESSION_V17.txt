@@ -1,0 +1,12 @@
+V17 DYNAMIC DESIGN THRESHOLD REGRESSION
+
+three_vehicle_diverse: scores=[76, 79, 83] -> threshold=69.0% (dynamic)
+clean_normal_examples: scores=[91, 94, 96] -> threshold=82.0% (dynamic)
+moderate_normal_examples: scores=[82, 85, 88] -> threshold=75.0% (dynamic)
+two_examples: scores=[78, 84] -> threshold=71.0% (dynamic)
+single_example: scores=[75] -> threshold=82.0% (fallback)
+
+Conceptual normal sample: 75.1% >= 69.0% -> NORMAL on design axis
+Conceptual handmade sample: 51.0% < 69.0% -> REVIEW on design axis
+
+PASS

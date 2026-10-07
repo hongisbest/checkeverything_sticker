@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>스티커 중심형 관리자</title>
+<title>법인차량 홍보스티커 점검 관리자</title>
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
@@ -11,8 +11,8 @@
 
 <section class="hero">
   <div>
-    <p class="eyebrow">STICKER-BASED INSPECTION · ADMIN</p>
-    <h1>스티커 중심형 관리자</h1>
+    <p class="eyebrow">VEHICLE STICKER INSPECTION · ADMIN</p>
+    <h1>법인차량 홍보스티커 점검 관리자</h1>
     <p class="sub">스티커 원본을 판정기준으로 사용하고, 정상부착 예시사진은 촬영가이드와 정상상태 보정 데이터로 관리합니다.</p>
   </div>
   <span class="badge">COMPARE SITE</span>
@@ -57,8 +57,8 @@
       <label>권장 부착면</label>
       <select id="sideHint">
         <option value="both">좌·우 측면 공통</option>
-        <option value="driver">운전석 측면</option>
-        <option value="passenger">조수석 측면</option>
+        <option value="driver">운전석</option>
+        <option value="passenger">조수석</option>
         <option value="rear">후면</option>
         <option value="front">전면</option>
       </select>
@@ -86,7 +86,7 @@
   <div id="stickerPreview" class="preview-box hidden" style="margin-top:10px"></div>
   <div id="exampleFileInfo" class="message info">정상부착 예시사진을 1장 이상 선택해 주세요.</div>
 
-  <button id="uploadStickerBtn" class="btn primary" style="margin-top:12px">스티커 A 데이터 등록</button>
+  <button id="uploadStickerBtn" class="btn primary" style="margin-top:12px">스티커 기준 데이터 등록</button>
   <div id="uploadStickerMessage" class="message info">등록 후 정상부착 예시사진에서 실제 스티커 영역을 한 번씩 지정하면 판정 보정 데이터가 완성됩니다.</div>
 </section>
 
@@ -140,12 +140,13 @@
 
     <div class="rule-card">
       <div class="rule-head">
-        <div><strong>디자인 동일성</strong><span>폰트·로고·자간·그래픽 형상이 기준 원본과 같은지 검사</span></div>
+        <div><strong>디자인 동일성</strong><span>정상 예시사진의 실제 점수범위로 스티커별 자동기준을 계산하여 폰트·로고·자간·그래픽 형상을 검사</span></div>
         <label class="switch-row"><input id="useDesign" type="checkbox"><span>사용</span></label>
       </div>
       <div class="form-group">
-        <label>최소 디자인 동일성 (%)</label>
+        <label>예시 부족 시 예비 기준 (%)</label>
         <input id="designSimilarityMin" type="number" min="0" max="100">
+        <p class="help">정상 예시가 2장 이상이면 이 값 대신 예시들의 정상 점수범위에서 자동 기준을 산출합니다.</p>
       </div>
     </div>
 
@@ -261,8 +262,8 @@
         <label>권장 부착면</label>
         <select id="editSideHint">
           <option value="both">좌·우 측면 공통</option>
-          <option value="driver">운전석 측면</option>
-          <option value="passenger">조수석 측면</option>
+          <option value="driver">운전석</option>
+          <option value="passenger">조수석</option>
           <option value="rear">후면</option>
           <option value="front">전면</option>
         </select>

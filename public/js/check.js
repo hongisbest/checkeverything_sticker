@@ -2111,10 +2111,23 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
   const color=calibratedColorDifference(best.cmp.colorVector,normalComparisons);
   const placement=placementSimilarityScore(snapshot,normalRecords);
 
+  const designCalibration=calibrateNormalDesignRange(
+    normalRecords,
+    calibration,
+    masterDescriptor,
+    snapshot.rules||defaultRules()
+  );
+
   const metrics={
     damage:r1(damage),
     shape:r1(preservation),
     designSimilarity:r1(designSimilarity),
+    designThreshold:r1(designCalibration.threshold),
+    designNormalMedian:r1(designCalibration.median),
+    designNormalQ25:r1(designCalibration.q25),
+    designNormalMin:r1(designCalibration.minimum),
+    designCalibrationCount:designCalibration.count,
+    designCalibrationMode:designCalibration.mode,
     placementSimilarity:Number.isFinite(placement?.score)?r1(placement.score):null,
     color:r1(color),
     confidence,
@@ -2152,10 +2165,10 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     }
 
     if(Number(rules.use_design ?? 1)===1 &&
-       metrics.designSimilarity<Number(rules.design_similarity_min ?? 82)){
+       metrics.designSimilarity<metrics.designThreshold){
       status="확인필요";
       findings.push(
-        `디자인 동일성 ${metrics.designSimilarity}% → 기준 스티커와 폰트·로고·자간·그래픽 형상이 다를 가능성`
+        `디자인 동일성 ${metrics.designSimilarity}% < ${metrics.designCalibrationMode==="dynamic"?"스티커별 자동기준":"고정기준"} ${metrics.designThreshold}% → 기준 스티커와 폰트·로고·자간·그래픽 형상이 다를 가능성`
       );
     }
 
@@ -2211,6 +2224,118 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
       metrics
     }
   };
+}
+
+
+function calibrateNormalDesignRange(normalRecords,calibration,masterDescriptor,rules){
+  const fallback=clamp(Number(rules?.design_similarity_min ?? 82),0,100);
+
+  if(!Array.isArray(normalRecords)||normalRecords.length<2){
+    return{
+      mode:"fallback",
+      threshold:fallback,
+      median:fallback,
+      q25:fallback,
+      minimum:fallback,
+      count:normalRecords?.length||0,
+      scores:[]
+    };
+  }
+
+  const scores=[];
+
+  for(let i=0;i<normalRecords.length;i++){
+    const current=normalRecords[i];
+    const others=normalRecords.filter((_,j)=>j!==i);
+
+    if(!others.length)continue;
+
+    const nearest=findNearestNormalExample(
+      current.cmp,
+      others,
+      masterDescriptor,
+      calibration
+    );
+
+    if(!nearest?.record)continue;
+
+    const residual=buildAngleAdjustedResidual(
+      current.cmp,
+      nearest.record.cmp,
+      calibration,
+      masterDescriptor
+    );
+
+    const score=designFidelityScore(
+      current.cmp,
+      nearest.record.cmp,
+      residual,
+      calibration,
+      masterDescriptor
+    );
+
+    if(Number.isFinite(score))scores.push(score);
+  }
+
+  if(scores.length<2){
+    return{
+      mode:"fallback",
+      threshold:fallback,
+      median:fallback,
+      q25:fallback,
+      minimum:fallback,
+      count:scores.length,
+      scores
+    };
+  }
+
+  const sorted=scores.slice().sort((a,b)=>a-b);
+  const medianScore=percentileValue(sorted,.50);
+  const q25=percentileValue(sorted,.25);
+  const minimum=sorted[0];
+
+  /*
+    Dynamic normal threshold:
+    - Three different normal vehicle examples are treated as the actual normal range.
+    - The lower quartile and median are given enough margin for perspective,
+      reflection, distance and phone-camera differences.
+    - 58% is a hard lower safety floor so clearly different handmade designs
+      are not normalized away merely because normal samples are diverse.
+    - 82% is the upper cap; a very clean sample set does not make the rule
+      stricter than the previous fixed rule.
+  */
+  const threshold=clamp(
+    Math.min(
+      q25-6,
+      medianScore-10,
+      minimum-3
+    ),
+    58,
+    82
+  );
+
+  return{
+    mode:"dynamic",
+    threshold,
+    median:medianScore,
+    q25,
+    minimum,
+    count:scores.length,
+    scores
+  };
+}
+
+function percentileValue(sorted,p){
+  if(!sorted?.length)return 0;
+  if(sorted.length===1)return Number(sorted[0]);
+
+  const index=(sorted.length-1)*clamp(p,0,1);
+  const lo=Math.floor(index);
+  const hi=Math.ceil(index);
+  const t=index-lo;
+
+  if(lo===hi)return Number(sorted[lo]);
+  return Number(sorted[lo])*(1-t)+Number(sorted[hi])*t;
 }
 
 function findNearestNormalExample(userCmp,normalRecords,masterDescriptor,calibration){
@@ -2662,8 +2787,8 @@ function defaultRules(){
 function sideLabel(v){
   return({
     both:"좌·우 측면 공통",
-    driver:"운전석 측면",
-    passenger:"조수석 측면",
+    driver:"운전석",
+    passenger:"조수석",
     rear:"후면",
     front:"전면"
   })[v]||v;
