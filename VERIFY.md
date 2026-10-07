@@ -196,3 +196,12 @@ Backend / D1 / R2 / Admin / schema / wrangler는 변경하지 않았습니다.
 - 저장 성공 전 STEP 02 초기화 금지
 - raw inspection 저장 성공 뒤에만 background analysis 스케줄
 - D1 schema / R2 경로 / 기존 데이터 구조 변경 없음
+
+
+## V15 실제 브라우저 E2E 검증
+- Chromium에서 사진 업로드 → 스티커 지정 → 번호판 지정 → STEP 05 열기 확인
+- 최종 제출 클릭 → POST /api/inspection 호출 확인
+- 서버 성공 응답 → `제출이 완료되었습니다` 표시 → STEP 02 복귀 확인
+- 서버 실패 응답 → 오류문구 표시 및 입력화면 유지 확인
+- 누락 helper `cropBoxCanvas` 정의 확인
+- 사용자 check.js/css cache-busting 적용

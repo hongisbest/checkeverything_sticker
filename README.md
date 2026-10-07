@@ -291,3 +291,9 @@ Canvas 기반 번호판/스티커 품질검사와 상태검사가 try 바깥에�
 - 서버 저장 성공 후에만 `제출 완료 / 접수번호` 표시
 - 이후 STEP 02로 복귀
 - 자동분석은 여전히 서버 저장 성공 이후 best-effort로만 수행
+
+
+## V15 실제 런타임 오류 수정
+V14를 실제 Chromium 브라우저로 클릭 테스트한 결과, STEP 04의 `선택영역 확인하고 제출하기`에서 `cropBoxCanvas is not defined` 런타임 오류를 재현했습니다. 이 오류 때문에 STEP 05가 열리지 않고 사용자는 버튼이 아무 반응 없는 것처럼 보였습니다.
+
+V15에서는 누락된 `cropBoxCanvas()`를 복구하고, 제출 전 확인화면 전체를 try/catch로 보호했으며, 전역 runtime error banner를 추가했습니다. 또한 `/js/check.js?v=15.0.0` 및 CSS version query를 넣어 기존 브라우저 캐시가 이전 JS를 계속 사용하는 문제를 차단했습니다.

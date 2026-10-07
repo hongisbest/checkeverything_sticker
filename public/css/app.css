@@ -669,3 +669,13 @@ body.modal-open{overflow:hidden}
 @keyframes submit-spin{
   to{transform:rotate(360deg)}
 }
+
+
+/* ===== V15 runtime error visibility ===== */
+.runtime-error-banner{
+  position:sticky;
+  top:8px;
+  z-index:9999;
+  margin:8px 0 12px;
+  box-shadow:0 8px 24px rgba(15,23,42,.12);
+}

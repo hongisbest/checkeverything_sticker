@@ -21,6 +21,24 @@ const S={
   submitting:false
 };
 
+window.addEventListener("error",e=>{
+  const message=e?.error?.message||e?.message||"알 수 없는 화면 오류";
+  showRuntimeError(message);
+});
+
+window.addEventListener("unhandledrejection",e=>{
+  const reason=e?.reason;
+  const message=reason?.message||String(reason||"알 수 없는 처리 오류");
+  showRuntimeError(message);
+});
+
+function showRuntimeError(message){
+  const box=$("runtimeErrorBanner");
+  if(!box)return;
+  box.textContent=`화면 처리 중 오류가 발생했습니다: ${message}`;
+  box.classList.remove("hidden");
+}
+
 document.addEventListener("DOMContentLoaded",()=>{
   bind();
   restoreProfile();
@@ -507,24 +525,30 @@ function analyzePlateVisibility(img,s){
 }
 
 function openSubmissionReview(){
-  if(!S.photoBlob||!S.sticker)return;
+  try{
+    if(!S.photoBlob||!S.sticker){
+      throw new Error("점검사진을 먼저 촬영하거나 업로드해 주세요.");
+    }
 
-  const missing=$("stickerMissingCheck").checked;
+    const missing=$("stickerMissingCheck").checked;
 
-  if(!S.plateSelection){
-    alert("번호판 영역을 먼저 지정해 주세요.");
-    return;
+    if(!S.plateSelection){
+      throw new Error("번호판 영역을 먼저 지정해 주세요.");
+    }
+
+    if(!missing&&!S.selection){
+      throw new Error("스티커 영역을 먼저 지정해 주세요.");
+    }
+
+    renderSubmissionReview();
+
+    $("submissionSection").classList.remove("hidden");
+    $("submissionSection").scrollIntoView({behavior:"smooth"});
+  }catch(e){
+    console.error("submission review failed",e);
+    showRuntimeError(e?.message||"제출 전 확인화면을 열지 못했습니다.");
+    alert(e?.message||"제출 전 확인화면을 열지 못했습니다.");
   }
-
-  if(!missing&&!S.selection){
-    alert("스티커 영역을 먼저 지정해 주세요.");
-    return;
-  }
-
-  renderSubmissionReview();
-
-  $("submissionSection").classList.remove("hidden");
-  $("submissionSection").scrollIntoView({behavior:"smooth"});
 }
 
 function backToSelection(){
@@ -1386,6 +1410,37 @@ function visualHash64(img){
   }
 
   return hex;
+}
+
+function cropBoxCanvas(img,s,maxSide){
+  if(!img||!s)throw new Error("선택영역 정보가 없습니다.");
+
+  const iw=Number(img.naturalWidth||img.width||0);
+  const ih=Number(img.naturalHeight||img.height||0);
+
+  if(!iw||!ih)throw new Error("점검사진 크기를 확인할 수 없습니다.");
+
+  const x=Math.max(0,Math.min(1,Number(s.x)||0));
+  const y=Math.max(0,Math.min(1,Number(s.y)||0));
+  const width=Math.max(.001,Math.min(1-x,Number(s.width)||0));
+  const height=Math.max(.001,Math.min(1-y,Number(s.height)||0));
+
+  const sx=x*iw;
+  const sy=y*ih;
+  const sw=width*iw;
+  const sh=height*ih;
+
+  const scale=Math.min(1,Number(maxSide||1200)/Math.max(sw,sh));
+
+  const c=document.createElement("canvas");
+  c.width=Math.max(1,Math.round(sw*scale));
+  c.height=Math.max(1,Math.round(sh*scale));
+
+  const ctx=c.getContext("2d");
+  if(!ctx)throw new Error("이미지 처리 기능을 사용할 수 없습니다.");
+
+  ctx.drawImage(img,sx,sy,sw,sh,0,0,c.width,c.height);
+  return c;
 }
 
 function cropSelectedCanvas(img,s,maxSide){
