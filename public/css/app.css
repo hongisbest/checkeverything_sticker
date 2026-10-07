@@ -679,3 +679,51 @@ body.modal-open{overflow:hidden}
   margin:8px 0 12px;
   box-shadow:0 8px 24px rgba(15,23,42,.12);
 }
+/* ===== V16 design / placement calibration ===== */
+.roi-mode-bar{
+  display:flex;
+  gap:8px;
+  margin-top:12px;
+  flex-wrap:wrap;
+}
+.sticker-calibration-box{
+  border-color:#ff4238;
+  background:rgba(255,66,56,.10);
+}
+.sticker-calibration-box::after{
+  content:"스티커";
+  background:#ff4238;
+}
+.plate-calibration-box{
+  border-color:#2563eb;
+  background:rgba(37,99,235,.10);
+}
+.plate-calibration-box::after{
+  content:"번호판";
+  background:#2563eb;
+}
+.calibration-draft-box{
+  border-color:#f59e0b;
+  background:rgba(245,158,11,.10);
+}
+.calibration-draft-box::after{
+  content:"지정 중";
+  background:#f59e0b;
+}
+.guide-plate-roi{
+  position:absolute;
+  border:2px solid #2563eb;
+  background:rgba(37,99,235,.08);
+  pointer-events:none;
+}
+.guide-plate-roi span{
+  position:absolute;
+  left:2px;
+  top:2px;
+  padding:2px 5px;
+  border-radius:4px;
+  background:#2563eb;
+  color:#fff;
+  font-size:9px;
+  font-weight:800;
+}

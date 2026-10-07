@@ -154,6 +154,14 @@ function renderGuideExample(guide){
     frame.appendChild(roi);
   }
 
+  if(guide.plate_calibrated){
+    const plate=document.createElement("div");
+    plate.className="guide-plate-roi";
+    plate.style.cssText=`left:${Number(guide.plate_x)*100}%;top:${Number(guide.plate_y)*100}%;width:${Number(guide.plate_width)*100}%;height:${Number(guide.plate_height)*100}%`;
+    plate.innerHTML="<span>번호판 위치</span>";
+    frame.appendChild(plate);
+  }
+
   const syncFrameToImage=()=>{
     if(!img.naturalWidth||!img.naturalHeight)return;
 
@@ -928,7 +936,9 @@ function compareNormalizedStructure(masterDescriptor,imageOrCanvas){
               sims:Array.from(result.sims),
               global:result.weightedMean,
               canvas:transformed,
-              colorVector:dominantChromaticVector(transformed)
+              colorVector:dominantChromaticVector(transformed),
+              hogHistograms:hog.histograms.map(h=>Array.from(h)),
+              edgeSignature:edgeProjectionSignature(transformed)
             };
           }
         }
@@ -2027,7 +2037,7 @@ async function buildSnapshotAnalysis(snapshot){
 async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
   const master=await loadImage(snapshot.sticker.image_url);
   const masterDescriptor=buildMasterDescriptor(master);
-  const normalComparisons=[];
+  const normalRecords=[];
 
   for(let i=0;i<examples.length;i++){
     const ex=examples[i];
@@ -2041,11 +2051,11 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     },1000);
 
     const cmp=await compareNormalizedStructureResponsive(masterDescriptor,crop);
-    normalComparisons.push(cmp);
-
+    normalRecords.push({ex,cmp});
     await yieldToBrowser();
   }
 
+  const normalComparisons=normalRecords.map(x=>x.cmp);
   const calibration=buildCalibration(masterDescriptor,normalComparisons);
 
   const base=stabilizeSelection(
@@ -2062,38 +2072,60 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     const box=candidates[i];
     const canvas=cropBoxCanvas(snapshot.photoImage,box,1100);
     const cmp=await compareNormalizedStructureResponsive(masterDescriptor,canvas);
-    const relative=relativeStructureScore(cmp.sims,calibration);
+    const nearest=findNearestNormalExample(cmp,normalRecords,masterDescriptor,calibration);
 
-    if(!best||relative>best.relative){
-      best={box,cmp,relative};
+    if(!best||nearest.matchScore>best.nearest.matchScore){
+      best={box,cmp,nearest};
     }
 
     await yieldToBrowser();
   }
 
-  if(!best){
+  if(!best||!best.nearest){
     throw new Error("스티커 비교영역을 계산하지 못했습니다.");
   }
 
-  const damage=calibratedDamageIndex(best.cmp.sims,calibration);
-  const preservation=calibratedPreservation(best.cmp.sims,calibration);
-  const baselineGlobal=median(normalComparisons.map(x=>x.global));
+  const nearestRecord=best.nearest.record;
+  const residual=buildAngleAdjustedResidual(
+    best.cmp,
+    nearestRecord.cmp,
+    calibration,
+    masterDescriptor
+  );
 
-  const confidence=r1(clamp(
-    best.cmp.global/Math.max(.05,baselineGlobal)*100,
-    0,100
-  ));
+  const damage=angleAdjustedDamageIndex(residual);
+  const preservation=nearestAdjustedPreservation(
+    best.cmp,
+    nearestRecord.cmp,
+    calibration
+  );
+  const designSimilarity=designFidelityScore(
+    best.cmp,
+    nearestRecord.cmp,
+    residual,
+    calibration,
+    masterDescriptor
+  );
 
+  const confidence=r1(clamp(best.nearest.matchScore*100,0,100));
   const color=calibratedColorDifference(best.cmp.colorVector,normalComparisons);
+  const placement=placementSimilarityScore(snapshot,normalRecords);
 
   const metrics={
     damage:r1(damage),
     shape:r1(preservation),
+    designSimilarity:r1(designSimilarity),
+    placementSimilarity:Number.isFinite(placement?.score)?r1(placement.score):null,
     color:r1(color),
     confidence,
-    baselineGlobal:r1(baselineGlobal*100),
+    rawStructureDifference:r1((1-best.cmp.global)*100),
+    nearestExampleId:Number(nearestRecord.ex.id),
+    nearestExampleSimilarity:r1(best.nearest.matchScore*100),
+    largestDamageCluster:r1(residual.largestClusterPct),
+    distributedDifference:r1(residual.distributedPct),
     stableCells:calibration.stableIndices.length,
     normalExamples:normalComparisons.length,
+    placementExamples:normalRecords.filter(x=>x.ex.plate_calibrated).length,
     missing:false
   };
 
@@ -2102,26 +2134,43 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
   let recommendation="";
   const findings=[];
 
-  if(confidence<62||calibration.stableIndices.length<12){
+  if(confidence<58||calibration.stableIndices.length<12){
     status="판정불가";
     findings.push(
-      "스티커 구조 검출신뢰도가 낮아 손상으로 판정하지 않았습니다. 관리자가 원본 사진과 선택영역을 확인해 주세요."
+      "스티커 구조 검출신뢰도가 낮아 자동판정을 확정하지 않았습니다. 관리자가 원본 사진과 선택영역을 직접 확인해 주세요."
     );
   }else{
     if(Number(rules.use_damage)===1){
       if(metrics.damage>=Number(rules.damage_replace_min)){
         status="확인필요";
         recommendation="교체 권고";
-        findings.push(`구조 손상지수 ${metrics.damage}% → 교체 권고`);
+        findings.push(`보정 구조손상 ${metrics.damage}% → 교체 권고`);
       }else if(metrics.damage>Number(rules.damage_normal_max)){
         status="확인필요";
-        findings.push(`구조 손상지수 ${metrics.damage}% → 확인필요`);
+        findings.push(`보정 구조손상 ${metrics.damage}% → 손상 여부 확인필요`);
       }
+    }
+
+    if(Number(rules.use_design ?? 1)===1 &&
+       metrics.designSimilarity<Number(rules.design_similarity_min ?? 82)){
+      status="확인필요";
+      findings.push(
+        `디자인 동일성 ${metrics.designSimilarity}% → 기준 스티커와 폰트·로고·자간·그래픽 형상이 다를 가능성`
+      );
+    }
+
+    if(Number(rules.use_placement ?? 1)===1 &&
+       Number.isFinite(metrics.placementSimilarity) &&
+       metrics.placementSimilarity<Number(rules.placement_similarity_min ?? 55)){
+      status="확인필요";
+      findings.push(
+        `부착위치 유사도 ${metrics.placementSimilarity}% → 정상 예시 대비 위치·방향 확인필요`
+      );
     }
 
     if(Number(rules.use_shape)===1&&metrics.shape<Number(rules.shape_similarity_min)){
       status="확인필요";
-      findings.push(`구조 보존율 ${metrics.shape}% → 로고·문구·그래픽 확인필요`);
+      findings.push(`구조 보존율 ${metrics.shape}% → 로고·문구·그래픽 구조 확인필요`);
     }
 
     if(Number(rules.use_color)===1&&metrics.color>Number(rules.color_difference_max)){
@@ -2131,18 +2180,24 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
 
     if(!findings.length){
       findings.push(
-        "정상부착 예시의 정상변동 범위 안에서 스티커 구조가 보존되어 있습니다."
+        "촬영각도에 가장 가까운 정상 예시의 변동범위를 제외한 결과, 손상·디자인·부착위치에서 뚜렷한 이상징후가 없습니다."
       );
     }
   }
 
+  const placementForScore=Number.isFinite(metrics.placementSimilarity)
+    ? metrics.placementSimilarity
+    : 100;
+
   const score=status==="판정불가"
     ? r1(confidence*.5)
     : r1(clamp(
-        (100-metrics.damage)*.50+
-        metrics.shape*.35+
-        confidence*.10+
-        (100-Math.min(100,metrics.color))*.05,
+        (100-metrics.damage)*.34+
+        metrics.designSimilarity*.28+
+        metrics.shape*.18+
+        placementForScore*.08+
+        confidence*.08+
+        (100-Math.min(100,metrics.color))*.04,
         0,100
       ));
 
@@ -2156,6 +2211,350 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
       metrics
     }
   };
+}
+
+function findNearestNormalExample(userCmp,normalRecords,masterDescriptor,calibration){
+  let best=null;
+
+  for(const record of normalRecords){
+    let residual=0,total=0;
+
+    for(const i of calibration.stableIndices){
+      const w=calibration.weights[i]/Math.max(.0001,calibration.meanEnergy);
+      residual+=Math.abs(Number(userCmp.sims[i]||0)-Number(record.cmp.sims[i]||0))*w;
+      total+=w;
+    }
+
+    const residualSimilarity=clamp(1-residual/Math.max(.0001,total),0,1);
+    const direct=directHogSimilarity(
+      userCmp.hogHistograms,
+      record.cmp.hogHistograms,
+      calibration.stableIndices,
+      calibration
+    );
+    const projection=vectorSimilarity(userCmp.edgeSignature,record.cmp.edgeSignature);
+
+    const matchScore=clamp(
+      residualSimilarity*.50+
+      direct*.35+
+      projection*.15,
+      0,1
+    );
+
+    if(!best||matchScore>best.matchScore){
+      best={record,matchScore,residualSimilarity,direct,projection};
+    }
+  }
+
+  return best;
+}
+
+function buildAngleAdjustedResidual(userCmp,normalCmp,calibration,masterDescriptor){
+  const bad=new Set();
+  const severity=new Map();
+  let totalWeight=0;
+  let badWeight=0;
+
+  for(const i of calibration.stableIndices){
+    const normal=Number(normalCmp.sims[i]||0);
+    const current=Number(userCmp.sims[i]||0);
+    const variation=Number(calibration.variability[i]||0);
+    const tolerance=Math.max(.08,variation*2.4);
+    const deficit=Math.max(0,normal-current-tolerance);
+    const w=calibration.weights[i]/Math.max(.0001,calibration.meanEnergy);
+
+    totalWeight+=w;
+
+    const ratio=current/Math.max(.12,normal);
+    const sev=clamp(deficit/.32,0,1);
+
+    if(deficit>.07&&ratio<.86){
+      bad.add(i);
+      severity.set(i,sev);
+      badWeight+=w*sev;
+    }
+  }
+
+  const rows=masterDescriptor.hog.rows;
+  const cols=masterDescriptor.hog.cols;
+  const visited=new Set();
+  let largestCluster=new Set();
+  let largestWeight=0;
+
+  for(const start of bad){
+    if(visited.has(start))continue;
+
+    const queue=[start];
+    const cluster=new Set();
+    let weight=0;
+
+    visited.add(start);
+
+    while(queue.length){
+      const i=queue.pop();
+      cluster.add(i);
+
+      const w=calibration.weights[i]/Math.max(.0001,calibration.meanEnergy);
+      weight+=w*Number(severity.get(i)||0);
+
+      const r=Math.floor(i/cols);
+      const c=i%cols;
+      const neighbours=[
+        [r-1,c],[r+1,c],[r,c-1],[r,c+1],
+        [r-1,c-1],[r-1,c+1],[r+1,c-1],[r+1,c+1]
+      ];
+
+      for(const [nr,nc] of neighbours){
+        if(nr<0||nr>=rows||nc<0||nc>=cols)continue;
+        const ni=nr*cols+nc;
+
+        if(bad.has(ni)&&!visited.has(ni)){
+          visited.add(ni);
+          queue.push(ni);
+        }
+      }
+    }
+
+    if(weight>largestWeight){
+      largestWeight=weight;
+      largestCluster=cluster;
+    }
+  }
+
+  const totalBadPct=badWeight/Math.max(.0001,totalWeight)*100;
+  const largestClusterPct=largestWeight/Math.max(.0001,totalWeight)*100;
+  const distributedPct=Math.max(0,totalBadPct-largestClusterPct);
+
+  return{
+    bad,
+    severity,
+    largestCluster,
+    totalBadPct,
+    largestClusterPct,
+    distributedPct
+  };
+}
+
+function angleAdjustedDamageIndex(residual){
+  // True peeling/missing regions normally create one coherent cluster.
+  // Scattered differences caused by perspective/font/noise receive much less damage weight.
+  return clamp(
+    residual.largestClusterPct*.82+
+    residual.distributedPct*.18,
+    0,100
+  );
+}
+
+function nearestAdjustedPreservation(userCmp,normalCmp,calibration){
+  let sum=0,total=0;
+
+  for(const i of calibration.stableIndices){
+    const normal=Math.max(.12,Number(normalCmp.sims[i]||0));
+    const current=Number(userCmp.sims[i]||0);
+    const w=calibration.weights[i]/Math.max(.0001,calibration.meanEnergy);
+
+    sum+=clamp(current/normal,0,1)*w;
+    total+=w;
+  }
+
+  return clamp(sum/Math.max(.0001,total)*100,0,100);
+}
+
+function designFidelityScore(userCmp,normalCmp,residual,calibration,masterDescriptor){
+  const indices=calibration.stableIndices.filter(i=>!residual.largestCluster.has(i));
+  const direct=directHogSimilarity(
+    userCmp.hogHistograms,
+    normalCmp.hogHistograms,
+    indices.length?indices:calibration.stableIndices,
+    calibration
+  );
+
+  let cellConsistency=0,total=0;
+
+  for(const i of (indices.length?indices:calibration.stableIndices)){
+    const w=calibration.weights[i]/Math.max(.0001,calibration.meanEnergy);
+    const d=Math.abs(Number(userCmp.sims[i]||0)-Number(normalCmp.sims[i]||0));
+
+    cellConsistency+=clamp(1-d/.38,0,1)*w;
+    total+=w;
+  }
+
+  cellConsistency/=Math.max(.0001,total);
+
+  const projection=vectorSimilarity(userCmp.edgeSignature,normalCmp.edgeSignature);
+  const masterRatio=clamp(
+    userCmp.global/Math.max(.10,normalCmp.global),
+    0,1
+  );
+
+  return clamp(
+    (
+      direct*.46+
+      projection*.24+
+      cellConsistency*.22+
+      masterRatio*.08
+    )*100,
+    0,100
+  );
+}
+
+function directHogSimilarity(a,b,indices,calibration){
+  if(!a||!b||!indices?.length)return 0;
+
+  let sum=0,total=0;
+
+  for(const i of indices){
+    const av=a[i],bv=b[i];
+    if(!av||!bv)continue;
+
+    let dot=0,na=0,nb=0;
+
+    for(let k=0;k<Math.min(av.length,bv.length);k++){
+      dot+=av[k]*bv[k];
+      na+=av[k]*av[k];
+      nb+=bv[k]*bv[k];
+    }
+
+    const sim=(na>0&&nb>0)
+      ? clamp(dot/Math.sqrt(na*nb),0,1)
+      : 0;
+
+    const w=calibration.weights[i]/Math.max(.0001,calibration.meanEnergy);
+    sum+=sim*w;
+    total+=w;
+  }
+
+  return sum/Math.max(.0001,total);
+}
+
+function edgeProjectionSignature(canvas){
+  const W=canvas.width,H=canvas.height;
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
+  const rgba=ctx.getImageData(0,0,W,H).data;
+  const gray=new Float32Array(W*H);
+
+  for(let p=0,i=0;p<W*H;p++,i+=4){
+    gray[p]=.299*rgba[i]+.587*rgba[i+1]+.114*rgba[i+2];
+  }
+
+  const xBins=24,yBins=12;
+  const xp=new Float32Array(xBins);
+  const yp=new Float32Array(yBins);
+
+  for(let y=1;y<H-1;y++){
+    for(let x=1;x<W-1;x++){
+      const p=y*W+x;
+      const gx=Math.abs(gray[p+1]-gray[p-1]);
+      const gy=Math.abs(gray[p+W]-gray[p-W]);
+      const m=Math.min(255,gx+gy);
+
+      xp[Math.min(xBins-1,Math.floor(x/W*xBins))]+=m;
+      yp[Math.min(yBins-1,Math.floor(y/H*yBins))]+=m;
+    }
+  }
+
+  const normalize=v=>{
+    let n=0;
+    for(const x of v)n+=x*x;
+    n=Math.sqrt(n)||1;
+    return Array.from(v,x=>x/n);
+  };
+
+  return[
+    ...normalize(xp),
+    ...normalize(yp)
+  ];
+}
+
+function vectorSimilarity(a,b){
+  if(!a||!b||!a.length||!b.length)return 0;
+
+  let dot=0,na=0,nb=0;
+  const n=Math.min(a.length,b.length);
+
+  for(let i=0;i<n;i++){
+    dot+=Number(a[i]||0)*Number(b[i]||0);
+    na+=Number(a[i]||0)**2;
+    nb+=Number(b[i]||0)**2;
+  }
+
+  if(na<=0||nb<=0)return 0;
+  return clamp(dot/Math.sqrt(na*nb),0,1);
+}
+
+function placementSimilarityScore(snapshot,normalRecords){
+  if(!snapshot.plateSelection||!snapshot.selection)return null;
+
+  const user=geometrySignature(snapshot.selection,snapshot.plateSelection);
+  if(!user)return null;
+
+  let best=null;
+
+  for(const record of normalRecords){
+    const ex=record.ex;
+    if(!ex.plate_calibrated)continue;
+
+    const normal=geometrySignature(
+      {
+        x:Number(ex.crop_x),
+        y:Number(ex.crop_y),
+        width:Number(ex.crop_width),
+        height:Number(ex.crop_height)
+      },
+      {
+        x:Number(ex.plate_x),
+        y:Number(ex.plate_y),
+        width:Number(ex.plate_width),
+        height:Number(ex.plate_height)
+      }
+    );
+
+    if(!normal)continue;
+
+    const angleDiff=circularAngleDifference(user.angle,normal.angle);
+    const distDiff=Math.abs(Math.log((user.distance+.15)/(normal.distance+.15)));
+    const sizeDiff=Math.abs(Math.log((user.sizeRatio+.08)/(normal.sizeRatio+.08)));
+
+    const penalty=
+      (angleDiff/(Math.PI/3.2))**2*.45+
+      (distDiff/.72)**2*.35+
+      (sizeDiff/.72)**2*.20;
+
+    const score=clamp(Math.exp(-penalty)*100,0,100);
+
+    if(!best||score>best.score){
+      best={score,exampleId:Number(ex.id)};
+    }
+  }
+
+  return best;
+}
+
+function geometrySignature(sticker,plate){
+  if(!sticker||!plate)return null;
+
+  const pcx=plate.x+plate.width/2;
+  const pcy=plate.y+plate.height/2;
+  const scx=sticker.x+sticker.width/2;
+  const scy=sticker.y+sticker.height/2;
+
+  const plateScale=Math.sqrt(Math.max(.000001,plate.width*plate.height));
+  const stickerScale=Math.sqrt(Math.max(.000001,sticker.width*sticker.height));
+
+  const dx=(scx-pcx)/plateScale;
+  const dy=(scy-pcy)/plateScale;
+
+  return{
+    angle:Math.atan2(dy,dx),
+    distance:Math.hypot(dx,dy),
+    sizeRatio:stickerScale/plateScale
+  };
+}
+
+function circularAngleDifference(a,b){
+  let d=Math.abs(a-b)%(Math.PI*2);
+  if(d>Math.PI)d=Math.PI*2-d;
+  return d;
 }
 
 async function compareNormalizedStructureResponsive(masterDescriptor,imageOrCanvas){
@@ -2197,7 +2596,9 @@ async function compareNormalizedStructureResponsive(masterDescriptor,imageOrCanv
               sims:Array.from(result.sims),
               global:result.weightedMean,
               canvas:transformed,
-              colorVector:dominantChromaticVector(transformed)
+              colorVector:dominantChromaticVector(transformed),
+              hogHistograms:hog.histograms.map(h=>Array.from(h)),
+              edgeSignature:edgeProjectionSignature(transformed)
             };
           }
 
@@ -2246,10 +2647,14 @@ function defaultRules(){
   return{
     damage_normal_max:10,
     damage_replace_min:30,
-    shape_similarity_min:70,
+    shape_similarity_min:72,
+    design_similarity_min:82,
+    placement_similarity_min:55,
     color_difference_max:35,
     use_damage:1,
     use_shape:1,
+    use_design:1,
+    use_placement:1,
     use_color:1
   };
 }

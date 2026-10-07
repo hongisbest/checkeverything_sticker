@@ -7,6 +7,9 @@ const S={
   roiDrawing:false,
   roiStart:null,
   roiDraft:null,
+  roiMode:"sticker",
+  roiSticker:null,
+  roiPlate:null,
   inspectionItems:[],
   selectedInspectionIds:new Set()
 };
@@ -31,6 +34,8 @@ function bind(){
   $("addExamplesBtn").onclick=addExamples;
 
   $("closeExampleRoiBtn").onclick=closeExampleRoi;
+  $("exampleStickerModeBtn").onclick=()=>setExampleRoiMode("sticker");
+  $("examplePlateModeBtn").onclick=()=>setExampleRoiMode("plate");
   $("resetExampleRoiBtn").onclick=resetExampleRoi;
   $("saveExampleRoiBtn").onclick=saveExampleRoi;
   $("exampleRoiStage").addEventListener("pointerdown",startExampleRoi);
@@ -293,7 +298,8 @@ async function loadExamples(){
             <strong>예시사진 ${i+1}</strong>
             <div style="margin-top:5px">
               ${Number(x.is_guide)===1?'<span class="pill active">촬영가이드 1번</span>':''}
-              ${x.calibrated?'<span class="pill normal">스티커영역 설정완료</span>':'<span class="pill review">영역설정 필요</span>'}
+              ${x.calibrated?'<span class="pill normal">스티커영역 완료</span>':'<span class="pill review">스티커영역 필요</span>'}
+              ${x.plate_calibrated?'<span class="pill normal">위치기준 완료</span>':'<span class="pill">번호판 미설정</span>'}
             </div>
           </div>
           <div class="row-actions">
@@ -306,7 +312,8 @@ async function loadExamples(){
       : '<div class="empty">예시사진이 없습니다.</div>';
 
     const calibrated=S.examples.filter(x=>x.calibrated).length;
-    msg("examplesMessage",`예시 ${S.examples.length}장 · 스티커영역 설정완료 ${calibrated}장`,"info");
+    const placed=S.examples.filter(x=>x.calibrated&&x.plate_calibrated).length;
+    msg("examplesMessage",`예시 ${S.examples.length}장 · 스티커영역 ${calibrated}장 · 위치기준 ${placed}장`,"info");
   }catch(e){
     $("examplesList").innerHTML=`<div class="message error">${esc(e.message)}</div>`;
   }
@@ -383,21 +390,20 @@ window.openExampleRoi=function(id){
   if(!ex)return;
 
   S.roiExampleId=id;
-  S.roiDraft=ex.calibrated
+  S.roiSticker=ex.calibrated
     ? {x:Number(ex.crop_x),y:Number(ex.crop_y),width:Number(ex.crop_width),height:Number(ex.crop_height)}
     : null;
+  S.roiPlate=ex.plate_calibrated
+    ? {x:Number(ex.plate_x),y:Number(ex.plate_y),width:Number(ex.plate_width),height:Number(ex.plate_height)}
+    : null;
+  S.roiDraft=null;
 
   $("exampleRoiImage").src=`${ex.image_url}?v=${Date.now()}`;
   $("exampleRoiModal").classList.remove("hidden");
   $("examplesModal").classList.add("hidden");
 
-  if(S.roiDraft){
-    $("exampleRoiBox").classList.remove("hidden");
-    renderExampleRoi();
-    $("saveExampleRoiBtn").disabled=false;
-  }else{
-    resetExampleRoi();
-  }
+  renderStoredExampleRois();
+  setExampleRoiMode("sticker");
 };
 
 function closeExampleRoi(){
@@ -408,6 +414,30 @@ function closeExampleRoi(){
   $("examplesModal").classList.remove("hidden");
   S.roiDrawing=false;
   S.roiStart=null;
+  S.roiDraft=null;
+}
+
+function setExampleRoiMode(mode){
+  S.roiMode=mode==="plate" ? "plate" : "sticker";
+  S.roiDraft=null;
+  $("exampleRoiDraftBox").classList.add("hidden");
+
+  $("exampleStickerModeBtn").classList.toggle("primary",S.roiMode==="sticker");
+  $("examplePlateModeBtn").classList.toggle("primary",S.roiMode==="plate");
+
+  const current=S.roiMode==="plate" ? S.roiPlate : S.roiSticker;
+  $("saveExampleRoiBtn").disabled=!current;
+  $("saveExampleRoiBtn").textContent=S.roiMode==="plate"
+    ? "번호판 영역 저장"
+    : "스티커 영역 저장";
+
+  msg(
+    "exampleRoiMessage",
+    S.roiMode==="plate"
+      ? "번호판 전체를 타이트하게 지정해 주세요. 위치 판정을 사용하지 않으면 생략해도 됩니다."
+      : "차량이나 문손잡이를 제외하고 실제 스티커 전체만 타이트하게 지정해 주세요.",
+    "info"
+  );
 }
 
 function roiPoint(e){
@@ -427,8 +457,8 @@ function startExampleRoi(e){
   S.roiStart=roiPoint(e);
   S.roiDraft={x:S.roiStart.x,y:S.roiStart.y,width:0,height:0};
 
-  $("exampleRoiBox").classList.remove("hidden");
-  renderExampleRoi();
+  $("exampleRoiDraftBox").classList.remove("hidden");
+  renderExampleDraft();
 }
 
 function moveExampleRoi(e){
@@ -443,7 +473,7 @@ function moveExampleRoi(e){
     height:Math.abs(p.y-S.roiStart.y)
   };
 
-  renderExampleRoi();
+  renderExampleDraft();
 }
 
 function endExampleRoi(){
@@ -451,18 +481,49 @@ function endExampleRoi(){
   S.roiDrawing=false;
 
   if(!S.roiDraft||S.roiDraft.width<.02||S.roiDraft.height<.02){
-    resetExampleRoi();
+    S.roiDraft=null;
+    $("exampleRoiDraftBox").classList.add("hidden");
     return;
   }
 
+  if(S.roiMode==="plate"){
+    S.roiPlate={...S.roiDraft};
+  }else{
+    S.roiSticker={...S.roiDraft};
+  }
+
+  S.roiDraft=null;
+  $("exampleRoiDraftBox").classList.add("hidden");
+  renderStoredExampleRois();
   $("saveExampleRoiBtn").disabled=false;
 }
 
-function renderExampleRoi(){
+function renderExampleDraft(){
   if(!S.roiDraft)return;
+  renderExampleBox($("exampleRoiDraftBox"),S.roiDraft);
+}
 
-  const b=S.roiDraft;
-  Object.assign($("exampleRoiBox").style,{
+function renderStoredExampleRois(){
+  const stickerBox=$("exampleStickerRoiBox");
+  const plateBox=$("examplePlateRoiBox");
+
+  if(S.roiSticker){
+    renderExampleBox(stickerBox,S.roiSticker);
+    stickerBox.classList.remove("hidden");
+  }else{
+    stickerBox.classList.add("hidden");
+  }
+
+  if(S.roiPlate){
+    renderExampleBox(plateBox,S.roiPlate);
+    plateBox.classList.remove("hidden");
+  }else{
+    plateBox.classList.add("hidden");
+  }
+}
+
+function renderExampleBox(el,b){
+  Object.assign(el.style,{
     left:`${b.x*100}%`,
     top:`${b.y*100}%`,
     width:`${b.width*100}%`,
@@ -471,36 +532,70 @@ function renderExampleRoi(){
 }
 
 function resetExampleRoi(){
+  if(S.roiMode==="plate"){
+    S.roiPlate=null;
+    $("examplePlateRoiBox").classList.add("hidden");
+  }else{
+    S.roiSticker=null;
+    $("exampleStickerRoiBox").classList.add("hidden");
+  }
+
   S.roiDraft=null;
   S.roiDrawing=false;
   S.roiStart=null;
-
-  $("exampleRoiBox").classList.add("hidden");
+  $("exampleRoiDraftBox").classList.add("hidden");
   $("saveExampleRoiBtn").disabled=true;
-  msg("exampleRoiMessage","차량이나 문손잡이를 제외하고 실제 스티커 전체만 드래그해 주세요.","info");
+
+  msg(
+    "exampleRoiMessage",
+    S.roiMode==="plate"
+      ? "번호판 전체를 다시 드래그해 주세요."
+      : "스티커 전체를 다시 드래그해 주세요.",
+    "info"
+  );
 }
 
 async function saveExampleRoi(){
-  if(!S.roiExampleId||!S.roiDraft)return;
+  if(!S.roiExampleId)return;
+
+  const region=S.roiMode==="plate" ? S.roiPlate : S.roiSticker;
+  if(!region)return;
 
   $("saveExampleRoiBtn").disabled=true;
-  msg("exampleRoiMessage","스티커 영역을 저장 중입니다...","info");
+
+  msg(
+    "exampleRoiMessage",
+    `${S.roiMode==="plate"?"번호판":"스티커"} 영역을 저장 중입니다...`,
+    "info"
+  );
 
   try{
     const r=await fetchTimeout(`/api/admin/examples/${S.roiExampleId}/roi`,{
       method:"PATCH",
       headers:{"content-type":"application/json"},
-      body:JSON.stringify(S.roiDraft)
+      body:JSON.stringify({
+        kind:S.roiMode,
+        ...region
+      })
     },12000);
 
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"영역 저장 실패");
 
-    msg("exampleRoiMessage","스티커 영역 저장 완료","success");
+    msg(
+      "exampleRoiMessage",
+      `${S.roiMode==="plate"?"번호판":"스티커"} 영역 저장 완료`,
+      "success"
+    );
+
     await loadExamples();
     await loadStickers();
 
-    setTimeout(closeExampleRoi,500);
+    if(S.roiMode==="sticker"&&!S.roiPlate){
+      setExampleRoiMode("plate");
+    }else{
+      setTimeout(closeExampleRoi,500);
+    }
   }catch(e){
     msg("exampleRoiMessage",e.message,"error");
     $("saveExampleRoiBtn").disabled=false;
@@ -629,10 +724,14 @@ function defaultRules(){
   return{
     damage_normal_max:10,
     damage_replace_min:30,
-    shape_similarity_min:70,
+    shape_similarity_min:72,
+    design_similarity_min:82,
+    placement_similarity_min:55,
     color_difference_max:35,
     use_damage:1,
     use_shape:1,
+    use_design:1,
+    use_placement:1,
     use_color:1
   };
 }
@@ -640,11 +739,15 @@ function defaultRules(){
 function fillRules(r){
   $("damageNormalMax").value=Number(r.damage_normal_max??10);
   $("damageReplaceMin").value=Number(r.damage_replace_min??30);
-  $("shapeSimilarityMin").value=Number(r.shape_similarity_min??70);
+  $("shapeSimilarityMin").value=Number(r.shape_similarity_min??72);
+  $("designSimilarityMin").value=Number(r.design_similarity_min??82);
+  $("placementSimilarityMin").value=Number(r.placement_similarity_min??55);
   $("colorDifferenceMax").value=Number(r.color_difference_max??35);
 
   $("useDamage").checked=Number(r.use_damage??1)===1;
   $("useShape").checked=Number(r.use_shape??1)===1;
+  $("useDesign").checked=Number(r.use_design??1)===1;
+  $("usePlacement").checked=Number(r.use_placement??1)===1;
   $("useColor").checked=Number(r.use_color??1)===1;
 }
 
@@ -653,9 +756,13 @@ function collectRules(){
     damage_normal_max:Number($("damageNormalMax").value),
     damage_replace_min:Number($("damageReplaceMin").value),
     shape_similarity_min:Number($("shapeSimilarityMin").value),
+    design_similarity_min:Number($("designSimilarityMin").value),
+    placement_similarity_min:Number($("placementSimilarityMin").value),
     color_difference_max:Number($("colorDifferenceMax").value),
     use_damage:$("useDamage").checked,
     use_shape:$("useShape").checked,
+    use_design:$("useDesign").checked,
+    use_placement:$("usePlacement").checked,
     use_color:$("useColor").checked
   };
 }
@@ -670,6 +777,14 @@ function updateRuleSummary(){
 
   if(r.use_shape){
     parts.push(`구조 보존율 ${r.shape_similarity_min}% 미만 확인필요`);
+  }
+
+  if(r.use_design){
+    parts.push(`디자인 동일성 ${r.design_similarity_min}% 미만 확인필요`);
+  }
+
+  if(r.use_placement){
+    parts.push(`부착위치 유사도 ${r.placement_similarity_min}% 미만 확인필요 (위치기준 설정 시)`);
   }
 
   if(r.use_color){
@@ -712,6 +827,8 @@ async function saveRules(){
     rules.damage_normal_max,
     rules.damage_replace_min,
     rules.shape_similarity_min,
+    rules.design_similarity_min,
+    rules.placement_similarity_min,
     rules.color_difference_max
   ].every(Number.isFinite)){
     msg("rulesMessage","모든 숫자를 입력해 주세요.","error");
@@ -808,7 +925,10 @@ async function loadInspections(){
                   <span>점수 ${Number(x.score).toFixed(1)} · <b>${esc(x.status)}</b></span>
                   <span>${x.status==="분석대기"
                     ? "자동분석 대기 중 · 사진과 선택영역은 저장 완료"
-                    : `구조 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`}</span>
+                    : `보정 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 동일성 ${Number(metrics.designSimilarity??0).toFixed(1)}% · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`}</span>
+                  <span>${Number.isFinite(Number(metrics.placementSimilarity))
+                    ? `부착위치 유사도 ${Number(metrics.placementSimilarity).toFixed(1)}%`
+                    : "부착위치 기준 미설정"}</span>
                   <span>${metrics.plateConfirmed===true
                     ? `번호판 확인 ✓ · 노출점수 ${Number(metrics.plateVisibilityScore??0).toFixed(1)}`
                     : "번호판 확인정보 없음"}</span>

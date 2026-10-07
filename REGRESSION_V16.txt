@@ -1,0 +1,15 @@
+V16 DECISION REGRESSION
+
+Scattered angle/perspective differences
+- corrected damage: 2.4%
+- expectation: low damage
+
+Localized coherent loss
+- corrected damage: 12.8%
+- expectation: materially higher damage
+
+Distributed design/font differences
+- corrected damage: 6.4%
+- expectation: lower than localized damage; handled by design-similarity axis
+
+PASS

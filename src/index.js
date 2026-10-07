@@ -110,7 +110,26 @@ function ensureSchema(env) {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       )`),
-      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_examples_sticker ON st_examples(sticker_id, sort_order, id)")
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_examples_sticker ON st_examples(sticker_id, sort_order, id)"),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_rule_extensions (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        design_similarity_min REAL NOT NULL DEFAULT 82,
+        placement_similarity_min REAL NOT NULL DEFAULT 55,
+        use_design INTEGER NOT NULL DEFAULT 1,
+        use_placement INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`),
+      env.DB.prepare(`INSERT OR IGNORE INTO st_rule_extensions(
+        id,design_similarity_min,placement_similarity_min,use_design,use_placement
+      ) VALUES(1,82,55,1,1)`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_example_geometry (
+        example_id INTEGER PRIMARY KEY,
+        plate_x REAL,
+        plate_y REAL,
+        plate_width REAL,
+        plate_height REAL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`)
     ]).catch(e => {
       schemaPromise = null;
       throw e;
@@ -256,11 +275,26 @@ async function verifyAdmin(request, env) {
 }
 
 async function readRules(env) {
-  return await env.DB.prepare(`
+  const base=await env.DB.prepare(`
     SELECT damage_normal_max,damage_replace_min,shape_similarity_min,color_difference_max,
            use_damage,use_shape,use_color,updated_at
     FROM st_rules WHERE id=1
   `).first();
+
+  const extra=await env.DB.prepare(`
+    SELECT design_similarity_min,placement_similarity_min,
+           use_design,use_placement,updated_at
+    FROM st_rule_extensions WHERE id=1
+  `).first();
+
+  return{
+    ...(base||{}),
+    design_similarity_min:Number(extra?.design_similarity_min ?? 82),
+    placement_similarity_min:Number(extra?.placement_similarity_min ?? 55),
+    use_design:Number(extra?.use_design ?? 1),
+    use_placement:Number(extra?.use_placement ?? 1),
+    updated_at:extra?.updated_at || base?.updated_at || null
+  };
 }
 
 async function getConfig(env) {
@@ -275,10 +309,13 @@ async function getConfig(env) {
 
   for (const r of rows.results || []) {
     const examples = await env.DB.prepare(`
-      SELECT id,sort_order,crop_x,crop_y,crop_width,crop_height,is_guide,created_at,updated_at
-      FROM st_examples
-      WHERE sticker_id=?
-      ORDER BY is_guide DESC,sort_order ASC,id ASC
+      SELECT e.id,e.sort_order,e.crop_x,e.crop_y,e.crop_width,e.crop_height,
+             e.is_guide,e.created_at,e.updated_at,
+             g.plate_x,g.plate_y,g.plate_width,g.plate_height
+      FROM st_examples e
+      LEFT JOIN st_example_geometry g ON g.example_id=e.id
+      WHERE e.sticker_id=?
+      ORDER BY e.is_guide DESC,e.sort_order ASC,e.id ASC
     `).bind(r.id).all();
 
     const ex=(examples.results || []).map(x=>({
@@ -286,7 +323,10 @@ async function getConfig(env) {
       image_url:`/api/example/${x.id}/image`,
       calibrated:
         x.crop_x!==null && x.crop_y!==null &&
-        x.crop_width!==null && x.crop_height!==null
+        x.crop_width!==null && x.crop_height!==null,
+      plate_calibrated:
+        x.plate_x!==null && x.plate_y!==null &&
+        x.plate_width!==null && x.plate_height!==null
     }));
 
     const guide = ex.find(x=>Number(x.is_guide)===1) || ex[0] || null;
@@ -296,7 +336,8 @@ async function getConfig(env) {
       image_url:`/api/sticker/${r.id}/image`,
       examples:ex,
       guide_example:guide,
-      calibrated_example_count:ex.filter(x=>x.calibrated).length
+      calibrated_example_count:ex.filter(x=>x.calibrated).length,
+      placement_example_count:ex.filter(x=>x.calibrated&&x.plate_calibrated).length
     });
   }
 
@@ -449,6 +490,19 @@ async function updateSticker(request, env, id) {
         WHERE sticker_id=?
       `).bind(inserted.id,id).run();
 
+      await env.DB.prepare(`
+        INSERT OR REPLACE INTO st_example_geometry(
+          example_id,plate_x,plate_y,plate_width,plate_height,updated_at
+        )
+        SELECT ne.id,g.plate_x,g.plate_y,g.plate_width,g.plate_height,datetime('now')
+        FROM st_examples ne
+        JOIN st_examples oe
+          ON oe.sticker_id=? AND oe.sort_order=ne.sort_order
+        JOIN st_example_geometry g
+          ON g.example_id=oe.id
+        WHERE ne.sticker_id=?
+      `).bind(id,inserted.id).run();
+
       return j({
         ok:true,
         id:inserted?.id,
@@ -537,6 +591,7 @@ async function deleteSticker(env, id) {
   ).bind(id).all();
 
   for (const ex of examples.results || []) {
+    await env.DB.prepare("DELETE FROM st_example_geometry WHERE example_id=?").bind(ex.id).run();
     await env.DB.prepare("DELETE FROM st_examples WHERE id=?").bind(ex.id).run();
 
     const refs = await env.DB.prepare(
@@ -563,10 +618,13 @@ async function listExamples(env, stickerId) {
   if (!sticker) return j({ok:false,error:"스티커를 찾을 수 없습니다."},404);
 
   const rows = await env.DB.prepare(`
-    SELECT id,sort_order,crop_x,crop_y,crop_width,crop_height,is_guide,created_at,updated_at
-    FROM st_examples
-    WHERE sticker_id=?
-    ORDER BY is_guide DESC,sort_order ASC,id ASC
+    SELECT e.id,e.sort_order,e.crop_x,e.crop_y,e.crop_width,e.crop_height,
+           e.is_guide,e.created_at,e.updated_at,
+           g.plate_x,g.plate_y,g.plate_width,g.plate_height
+    FROM st_examples e
+    LEFT JOIN st_example_geometry g ON g.example_id=e.id
+    WHERE e.sticker_id=?
+    ORDER BY e.is_guide DESC,e.sort_order ASC,e.id ASC
   `).bind(stickerId).all();
 
   return j({
@@ -577,7 +635,10 @@ async function listExamples(env, stickerId) {
       image_url:`/api/example/${x.id}/image`,
       calibrated:
         x.crop_x!==null && x.crop_y!==null &&
-        x.crop_width!==null && x.crop_height!==null
+        x.crop_width!==null && x.crop_height!==null,
+      plate_calibrated:
+        x.plate_x!==null && x.plate_y!==null &&
+        x.plate_width!==null && x.plate_height!==null
     }))
   });
 }
@@ -639,11 +700,12 @@ async function addExamples(request, env, stickerId) {
 
 async function updateExampleRoi(request, env, exampleId) {
   const body=await request.json().catch(()=>({}));
+  const kind=body.kind==="plate" ? "plate" : "sticker";
   const x=Number(body.x),y=Number(body.y),w=Number(body.width),h=Number(body.height);
 
   if (![x,y,w,h].every(Number.isFinite) || x<0 || y<0 || w<.01 || h<.01 ||
       x+w>1.0001 || y+h>1.0001) {
-    return j({ok:false,error:"스티커 영역 좌표가 올바르지 않습니다."},400);
+    return j({ok:false,error:`${kind==="plate"?"번호판":"스티커"} 영역 좌표가 올바르지 않습니다.`},400);
   }
 
   const ex=await env.DB.prepare("SELECT id,sticker_id FROM st_examples WHERE id=?")
@@ -651,15 +713,29 @@ async function updateExampleRoi(request, env, exampleId) {
 
   if (!ex) return j({ok:false,error:"예시사진을 찾을 수 없습니다."},404);
 
-  await env.DB.prepare(`
-    UPDATE st_examples
-    SET crop_x=?,crop_y=?,crop_width=?,crop_height=?,updated_at=datetime('now')
-    WHERE id=?
-  `).bind(x,y,w,h,exampleId).run();
+  if(kind==="plate"){
+    await env.DB.prepare(`
+      INSERT INTO st_example_geometry(
+        example_id,plate_x,plate_y,plate_width,plate_height,updated_at
+      ) VALUES(?,?,?,?,?,datetime('now'))
+      ON CONFLICT(example_id) DO UPDATE SET
+        plate_x=excluded.plate_x,
+        plate_y=excluded.plate_y,
+        plate_width=excluded.plate_width,
+        plate_height=excluded.plate_height,
+        updated_at=datetime('now')
+    `).bind(exampleId,x,y,w,h).run();
+  }else{
+    await env.DB.prepare(`
+      UPDATE st_examples
+      SET crop_x=?,crop_y=?,crop_width=?,crop_height=?,updated_at=datetime('now')
+      WHERE id=?
+    `).bind(x,y,w,h,exampleId).run();
+  }
 
   await env.DB.prepare("DELETE FROM st_analysis_cache WHERE sticker_id=?").bind(ex.sticker_id).run();
 
-  return j({ok:true});
+  return j({ok:true,kind});
 }
 
 async function setGuideExample(env, exampleId) {
@@ -691,6 +767,7 @@ async function deleteExample(env, exampleId) {
     return j({ok:false,error:"정상부착 예시사진은 최소 1장을 유지해야 합니다."},409);
   }
 
+  await env.DB.prepare("DELETE FROM st_example_geometry WHERE example_id=?").bind(exampleId).run();
   await env.DB.prepare("DELETE FROM st_examples WHERE id=?").bind(exampleId).run();
 
   if (Number(ex.is_guide)===1) {
@@ -758,8 +835,10 @@ async function saveRules(request, env) {
   const damageReplace = Number(body.damage_replace_min);
   const shapeMin = Number(body.shape_similarity_min);
   const colorMax = Number(body.color_difference_max);
+  const designMin = Number(body.design_similarity_min ?? 82);
+  const placementMin = Number(body.placement_similarity_min ?? 55);
 
-  if (![damageNormal,damageReplace,shapeMin,colorMax].every(Number.isFinite)) {
+  if (![damageNormal,damageReplace,shapeMin,colorMax,designMin,placementMin].every(Number.isFinite)) {
     return j({ok:false,error:"판정기준 값이 올바르지 않습니다."},400);
   }
 
@@ -767,6 +846,8 @@ async function saveRules(request, env) {
     damageNormal < 0 || damageNormal > 100 ||
     damageReplace < 0 || damageReplace > 100 ||
     shapeMin < 0 || shapeMin > 100 ||
+    designMin < 0 || designMin > 100 ||
+    placementMin < 0 || placementMin > 100 ||
     colorMax < 0 || colorMax > 255
   ) {
     return j({ok:false,error:"판정기준 값의 허용범위를 확인해 주세요."},400);
@@ -776,26 +857,44 @@ async function saveRules(request, env) {
     return j({ok:false,error:"교체권고 손상률은 정상 허용 손상률보다 커야 합니다."},400);
   }
 
-  await env.DB.prepare(`
-    INSERT INTO st_rules(
-      id,damage_normal_max,damage_replace_min,shape_similarity_min,color_difference_max,
-      use_damage,use_shape,use_color,updated_at
-    ) VALUES(1,?,?,?,?,?,?,?,datetime('now'))
-    ON CONFLICT(id) DO UPDATE SET
-      damage_normal_max=excluded.damage_normal_max,
-      damage_replace_min=excluded.damage_replace_min,
-      shape_similarity_min=excluded.shape_similarity_min,
-      color_difference_max=excluded.color_difference_max,
-      use_damage=excluded.use_damage,
-      use_shape=excluded.use_shape,
-      use_color=excluded.use_color,
-      updated_at=datetime('now')
-  `).bind(
-    damageNormal,damageReplace,shapeMin,colorMax,
-    body.use_damage ? 1 : 0,
-    body.use_shape ? 1 : 0,
-    body.use_color ? 1 : 0
-  ).run();
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO st_rules(
+        id,damage_normal_max,damage_replace_min,shape_similarity_min,color_difference_max,
+        use_damage,use_shape,use_color,updated_at
+      ) VALUES(1,?,?,?,?,?,?,?,datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        damage_normal_max=excluded.damage_normal_max,
+        damage_replace_min=excluded.damage_replace_min,
+        shape_similarity_min=excluded.shape_similarity_min,
+        color_difference_max=excluded.color_difference_max,
+        use_damage=excluded.use_damage,
+        use_shape=excluded.use_shape,
+        use_color=excluded.use_color,
+        updated_at=datetime('now')
+    `).bind(
+      damageNormal,damageReplace,shapeMin,colorMax,
+      body.use_damage ? 1 : 0,
+      body.use_shape ? 1 : 0,
+      body.use_color ? 1 : 0
+    ),
+    env.DB.prepare(`
+      INSERT INTO st_rule_extensions(
+        id,design_similarity_min,placement_similarity_min,
+        use_design,use_placement,updated_at
+      ) VALUES(1,?,?,?,?,datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        design_similarity_min=excluded.design_similarity_min,
+        placement_similarity_min=excluded.placement_similarity_min,
+        use_design=excluded.use_design,
+        use_placement=excluded.use_placement,
+        updated_at=datetime('now')
+    `).bind(
+      designMin,placementMin,
+      body.use_design ? 1 : 0,
+      body.use_placement ? 1 : 0
+    )
+  ]);
 
   return j({ok:true,rules:await readRules(env)});
 }

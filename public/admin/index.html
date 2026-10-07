@@ -140,6 +140,29 @@
 
     <div class="rule-card">
       <div class="rule-head">
+        <div><strong>디자인 동일성</strong><span>폰트·로고·자간·그래픽 형상이 기준 원본과 같은지 검사</span></div>
+        <label class="switch-row"><input id="useDesign" type="checkbox"><span>사용</span></label>
+      </div>
+      <div class="form-group">
+        <label>최소 디자인 동일성 (%)</label>
+        <input id="designSimilarityMin" type="number" min="0" max="100">
+      </div>
+    </div>
+
+    <div class="rule-card">
+      <div class="rule-head">
+        <div><strong>부착위치 유사도</strong><span>정상 예시의 번호판 대비 스티커 상대위치와 비교</span></div>
+        <label class="switch-row"><input id="usePlacement" type="checkbox"><span>사용</span></label>
+      </div>
+      <div class="form-group">
+        <label>최소 위치 유사도 (%)</label>
+        <input id="placementSimilarityMin" type="number" min="0" max="100">
+      </div>
+      <p class="help">정상 예시사진에서 번호판 영역까지 설정한 사진이 있을 때만 적용됩니다.</p>
+    </div>
+
+    <div class="rule-card">
+      <div class="rule-head">
         <div><strong>색상차이</strong><span>변색·오염 보조검사</span></div>
         <label class="switch-row"><input id="useColor" type="checkbox"><span>사용</span></label>
       </div>
@@ -299,19 +322,29 @@
   <div class="modal-panel roi-panel">
     <button id="closeExampleRoiBtn" class="modal-close" type="button">×</button>
     <span class="step">CALIBRATION ROI</span>
-    <h2>정상 스티커 영역 지정</h2>
-    <p class="help">차량이나 문손잡이를 제외하고 실제 스티커 전체만 최대한 타이트하게 드래그하세요.</p>
+    <h2>정상 예시사진 기준영역 설정</h2>
+    <p class="help">
+      스티커 영역은 손상·디자인 비교에 사용됩니다.
+      번호판 영역은 선택사항이며 부착위치 유사도 계산에 사용됩니다.
+    </p>
+
+    <div class="roi-mode-bar">
+      <button id="exampleStickerModeBtn" class="btn primary" type="button">① 스티커 영역</button>
+      <button id="examplePlateModeBtn" class="btn" type="button">② 번호판 영역(선택)</button>
+    </div>
 
     <div id="exampleRoiStage" class="example-roi-stage">
       <img id="exampleRoiImage" alt="예시사진">
-      <div id="exampleRoiBox" class="selection-box hidden"></div>
+      <div id="exampleStickerRoiBox" class="selection-box sticker-calibration-box hidden"></div>
+      <div id="examplePlateRoiBox" class="selection-box plate-calibration-box hidden"></div>
+      <div id="exampleRoiDraftBox" class="selection-box calibration-draft-box hidden"></div>
     </div>
 
     <div class="modal-actions">
-      <button id="resetExampleRoiBtn" class="btn">다시 그리기</button>
+      <button id="resetExampleRoiBtn" class="btn">현재 영역 다시 그리기</button>
       <button id="saveExampleRoiBtn" class="btn primary" disabled>스티커 영역 저장</button>
     </div>
-    <div id="exampleRoiMessage" class="message info">스티커 전체를 드래그해 주세요.</div>
+    <div id="exampleRoiMessage" class="message info">먼저 실제 스티커 전체를 타이트하게 지정해 주세요.</div>
   </div>
 </div>
 

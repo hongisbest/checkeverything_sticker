@@ -90,4 +90,24 @@ CREATE TABLE IF NOT EXISTS st_examples (
 
 CREATE INDEX IF NOT EXISTS idx_st_examples_sticker
 ON st_examples(sticker_id, sort_order, id);
+CREATE TABLE IF NOT EXISTS st_rule_extensions (
+  id INTEGER PRIMARY KEY CHECK (id=1),
+  design_similarity_min REAL NOT NULL DEFAULT 82,
+  placement_similarity_min REAL NOT NULL DEFAULT 55,
+  use_design INTEGER NOT NULL DEFAULT 1,
+  use_placement INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
+INSERT OR IGNORE INTO st_rule_extensions (
+  id,design_similarity_min,placement_similarity_min,use_design,use_placement
+) VALUES (1,82,55,1,1);
+
+CREATE TABLE IF NOT EXISTS st_example_geometry (
+  example_id INTEGER PRIMARY KEY,
+  plate_x REAL,
+  plate_y REAL,
+  plate_width REAL,
+  plate_height REAL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

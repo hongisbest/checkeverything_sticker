@@ -205,3 +205,29 @@ Backend / D1 / R2 / Admin / schema / wrangler는 변경하지 않았습니다.
 - 서버 실패 응답 → 오류문구 표시 및 입력화면 유지 확인
 - 누락 helper `cropBoxCanvas` 정의 확인
 - 사용자 check.js/css cache-busting 적용
+
+
+## V16 검증
+### 데이터 보존
+- 기존 st_stickers / st_examples / st_inspections / st_rules 유지
+- 신규 st_rule_extensions, st_example_geometry만 추가
+- DROP / TRUNCATE 없음
+- 기존 R2 객체 경로 변경 없음
+- 기존 점검결과 삭제 없음
+
+### 분석 로직
+- 가장 가까운 정상 예시 우선매칭
+- 예시 대비 초과 구조손실만 손상후보
+- 8방향 연결 손상군집 계산
+- 최대 손상군집을 실제 손상지수에 82% 가중
+- 산발차이는 18%만 반영
+- 최대 손상군집 제외 후 디자인 동일성 계산
+- HOG + edge projection + 구조일관성 기반 디자인 검사
+- 번호판 대비 상대 geometry 기반 위치 유사도
+
+### 판정 기본값
+- 손상 정상허용 10%
+- 교체권고 30%
+- 구조 보존율 72%
+- 디자인 동일성 82%
+- 위치 유사도 55%
