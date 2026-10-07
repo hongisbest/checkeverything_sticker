@@ -810,6 +810,9 @@ async function loadInspections(){
                   <span>${metrics.plateConfirmed===true
                     ? `번호판 확인 ✓ · 노출점수 ${Number(metrics.plateVisibilityScore??0).toFixed(1)}`
                     : "번호판 확인정보 없음"}</span>
+                  <span>${metrics.userAnalysisHidden===true
+                    ? "직원 화면에는 자동판정 결과 미노출 · 관리자 전용 결과"
+                    : "기존 점검결과"}</span>
                   <span>${esc(findings.join(" / "))}</span>
                   <span class="muted">${esc(x.created_at)}</span>
                 </div>

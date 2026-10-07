@@ -40,7 +40,8 @@ function bind(){
   $("resetStickerBtn").onclick=resetStickerSelection;
   $("resetPlateBtn").onclick=resetPlateSelection;
   $("stickerMissingCheck").onchange=toggleMissing;
-  $("analyzeBtn").onclick=analyzeSelected;
+  $("analyzeBtn").onclick=openSubmissionReview;
+  $("backToSelectionBtn").onclick=backToSelection;
   $("submitBtn").onclick=submitInspection;
 
   ["employeeName","employeeId","department","vehicleNo"].forEach(id=>{
@@ -231,10 +232,9 @@ async function preparePhoto(blob){
   S.photoUrl=URL.createObjectURL(blob);
 
   $("selectionImage").src=S.photoUrl;
-  $("resultPhoto").innerHTML=`<img src="${S.photoUrl}" alt="차량사진">`;
 
   $("selectionSection").classList.remove("hidden");
-  $("analysisSection").classList.add("hidden");
+  $("submissionSection").classList.add("hidden");
 
   S.selection=null;
   S.plateSelection=null;
@@ -505,7 +505,7 @@ function analyzePlateVisibility(img,s){
   };
 }
 
-async function analyzeSelected(){
+function openSubmissionReview(){
   if(!S.photoBlob||!S.sticker)return;
 
   const missing=$("stickerMissingCheck").checked;
@@ -520,69 +520,185 @@ async function analyzeSelected(){
     return;
   }
 
-  $("analysisSection").classList.remove("hidden");
-  $("resultStatus").textContent="분석중";
+  renderSubmissionReview();
+
+  $("submissionSection").classList.remove("hidden");
+  $("submissionSection").scrollIntoView({behavior:"smooth"});
+}
+
+function backToSelection(){
+  $("submissionSection").classList.add("hidden");
+  $("selectionSection").scrollIntoView({behavior:"smooth"});
+}
+
+function renderSubmissionReview(){
+  const missing=$("stickerMissingCheck").checked;
+
+  if(missing){
+    $("reviewStickerCrop").innerHTML=`
+      <div class="capture-review-empty">
+        <strong>홍보스티커 없음</strong>
+        <span>사용자가 ‘스티커 없음’을 선택했습니다.</span>
+      </div>
+    `;
+    $("reviewStickerState").textContent="스티커 없음";
+    $("reviewStickerState").className="pill review";
+    $("reviewStickerQuality").className="message warn";
+    $("reviewStickerQuality").textContent="실제 차량에 홍보스티커가 없는 경우에만 이 상태로 제출해 주세요.";
+  }else{
+    const stickerQuality=analyzeRegionVisibility(S.photoImage,S.selection,"sticker");
+    renderReviewCrop("reviewStickerCrop",S.selection,"홍보스티커");
+    $("reviewStickerState").textContent="영역 확인완료";
+    $("reviewStickerState").className="pill normal";
+    renderQualityMessage("reviewStickerQuality",stickerQuality,"스티커");
+  }
+
+  const plateQuality=analyzeRegionVisibility(S.photoImage,S.plateSelection,"plate");
+  renderReviewCrop("reviewPlateCrop",S.plateSelection,"차량번호판");
+  $("reviewPlateState").textContent="영역 확인완료";
+  $("reviewPlateState").className="pill normal";
+  renderQualityMessage("reviewPlateQuality",plateQuality,"번호판");
+}
+
+function renderReviewCrop(targetId,selection,label){
+  const canvas=cropBoxCanvas(S.photoImage,selection,900);
+  const url=canvas.toDataURL("image/jpeg",.92);
+
+  $(targetId).innerHTML=`
+    <img src="${url}" alt="${label} 확인영역">
+  `;
+}
+
+function analyzeRegionVisibility(img,s,type){
+  if(!img||!s){
+    return{score:0,width:0,height:0,tooSmall:true,lowDetail:true};
+  }
+
+  const actualWidth=Math.max(1,Math.round(s.width*img.naturalWidth));
+  const actualHeight=Math.max(1,Math.round(s.height*img.naturalHeight));
+
+  const canvas=document.createElement("canvas");
+  canvas.width=180;
+  canvas.height=96;
+
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
+
+  ctx.drawImage(
+    img,
+    s.x*img.naturalWidth,
+    s.y*img.naturalHeight,
+    s.width*img.naturalWidth,
+    s.height*img.naturalHeight,
+    0,0,canvas.width,canvas.height
+  );
+
+  const data=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+  const gray=new Float32Array(canvas.width*canvas.height);
+
+  let sum=0,sumSq=0;
+
+  for(let i=0,p=0;i<data.length;i+=4,p++){
+    const g=.299*data[i]+.587*data[i+1]+.114*data[i+2];
+    gray[p]=g;
+    sum+=g;
+    sumSq+=g*g;
+  }
+
+  const n=gray.length;
+  const mean=sum/n;
+  const variance=Math.max(0,sumSq/n-mean*mean);
+  const sd=Math.sqrt(variance);
+
+  let edges=0,total=0;
+
+  for(let y=1;y<canvas.height-1;y++){
+    for(let x=1;x<canvas.width-1;x++){
+      const p=y*canvas.width+x;
+      const gx=Math.abs(gray[p+1]-gray[p-1]);
+      const gy=Math.abs(gray[p+canvas.width]-gray[p-canvas.width]);
+
+      if(gx+gy>36)edges++;
+      total++;
+    }
+  }
+
+  const edgeDensity=edges/Math.max(1,total);
+  const contrastScore=clamp(sd/55*100,0,100);
+  const edgeScore=clamp(edgeDensity/.18*100,0,100);
+
+  const minWidth=type==="plate"?90:100;
+  const minHeight=type==="plate"?28:35;
+  const tooSmall=actualWidth<minWidth||actualHeight<minHeight;
+  const score=r1(contrastScore*.45+edgeScore*.55);
+
+  return{
+    score,
+    width:actualWidth,
+    height:actualHeight,
+    tooSmall,
+    lowDetail:score<22
+  };
+}
+
+function renderQualityMessage(targetId,q,label){
+  const el=$(targetId);
+
+  if(q.tooSmall){
+    el.className="message warn";
+    el.textContent=`${label} 영역이 ${q.width}×${q.height}px로 작습니다. 실제 대상이 더 크게 보이도록 촬영하거나 영역을 다시 지정하는 것을 권장합니다.`;
+    return;
+  }
+
+  if(q.lowDetail){
+    el.className="message warn";
+    el.textContent=`${label} 영역이 어둡거나 흐릴 수 있습니다. 확대사진에서 실제 내용을 알아볼 수 있는지 확인해 주세요.`;
+    return;
+  }
+
+  el.className="message success";
+  el.textContent=`${label} 영역이 충분한 크기와 선명도로 선택되었습니다.`;
+}
+
+async function buildAdminOnlyAnalysis(){
+  const missing=$("stickerMissingCheck").checked;
+
+  if(missing){
+    S.analysis=analyzeMissing();
+    S.analyzedSelection={x:0,y:0,width:1,height:1};
+    return;
+  }
+
+  const calibrated=(S.sticker.examples||[]).filter(x=>x.calibrated);
+
+  if(!calibrated.length){
+    S.analysis={
+      score:0,
+      status:"판정불가",
+      recommendation:"",
+      findings:["정상부착 예시사진의 스티커 영역 캘리브레이션이 없어 자동판정을 수행하지 못했습니다."],
+      metrics:{damage:0,shape:0,color:0,confidence:0,missing:false}
+    };
+    S.analyzedSelection=S.selection;
+    return;
+  }
 
   try{
-    if(missing){
-      S.analysis=analyzeMissing();
-      S.analyzedSelection={x:0,y:0,width:1,height:1};
-      renderAnalysis(S.analysis);
-      $("analysisSection").scrollIntoView({behavior:"smooth"});
-      return;
-    }
-
-    const calibrated=(S.sticker.examples||[]).filter(x=>x.calibrated);
-
-    if(!calibrated.length){
-      S.analysis={
-        score:0,
-        status:"판정불가",
-        recommendation:"",
-        findings:["관리자가 정상부착 예시사진의 스티커 영역을 먼저 설정해야 합니다."],
-        metrics:{damage:0,shape:0,color:0,confidence:0,missing:false}
-      };
-      renderAnalysis(S.analysis);
-      $("analysisSection").scrollIntoView({behavior:"smooth"});
-      return;
-    }
-
-    const cached=await getCachedAnalysis();
-
-    if(cached){
-      S.analysis={
-        score:cached.score,
-        status:cached.status,
-        recommendation:cached.recommendation||"",
-        findings:cached.findings||[],
-        metrics:{...(cached.metrics||{}),cacheHit:true}
-      };
-      S.analyzedSelection=cached.crop;
-      showAnalyzedCrop(cached.crop);
-      renderAnalysis(S.analysis);
-      $("findings").insertAdjacentHTML(
-        "afterbegin",
-        '<div class="finding ok">동일 사진의 이전 분석결과를 재사용했습니다.</div>'
-      );
-      $("analysisSection").scrollIntoView({behavior:"smooth"});
-      return;
-    }
-
+    // V12 intentionally bypasses the old same-photo result cache.
+    // A corrected sticker selection must always be re-analysed.
     const result=await analyzeAgainstMasterAndExamples(calibrated);
-
     S.analysis=result.analysis;
     S.analyzedSelection=result.crop;
-
-    showAnalyzedCrop(result.crop);
-    renderAnalysis(result.analysis);
-
-    await saveCachedAnalysis(result).catch(()=>{});
-
-    $("analysisSection").scrollIntoView({behavior:"smooth"});
   }catch(e){
-    console.error(e);
-    $("resultStatus").textContent="분석 실패";
-    $("findings").innerHTML='<div class="finding">분석 중 오류가 발생했습니다. 스티커 영역을 다시 선택해 주세요.</div>';
+    console.error("admin-only analysis failed",e);
+
+    S.analysis={
+      score:0,
+      status:"판정불가",
+      recommendation:"",
+      findings:["자동 분석 중 오류가 발생했습니다. 관리자가 원본 사진과 선택영역을 직접 확인해 주세요."],
+      metrics:{damage:0,shape:0,color:0,confidence:0,missing:false,analysisError:true}
+    };
+    S.analyzedSelection=S.selection;
   }
 }
 
@@ -1289,79 +1405,94 @@ function cropSelectedCanvas(img,s,maxSide){
 }
 
 function renderAnalysis(a){
-  $("resultStatus").textContent=a.recommendation?`${a.status} · ${a.recommendation}`:a.status;
-  $("resultStatus").className=`badge ${a.status==="정상"?"pill normal":"pill review"}`;
-
-  $("scoreValue").textContent=a.score;
-  $("confidenceValue").textContent=`${a.metrics.confidence??0}%`;
-  $("damageValue").textContent=`${a.metrics.damage}%`;
-  $("shapeValue").textContent=`${a.metrics.shape}%`;
-  $("colorValue").textContent=a.metrics.color;
-
-  $("findings").innerHTML=a.findings.map(x=>`
-    <div class="finding ${a.status==="정상"?"ok":""}">
-      ${esc(x)}
-    </div>
-  `).join("");
+  // V12: employee UI must never display automatic judgment values.
+  // Results are saved for the administrator only.
+  return a;
 }
 
 async function submitInspection(){
-  if(!S.photoBlob||!S.analysis){
-    setSubmitMessage("분석을 먼저 완료해 주세요.","error");
+  if(!S.photoBlob||!S.sticker){
+    setSubmitMessage("점검사진을 먼저 준비해 주세요.","error");
     return;
   }
 
   const name=$("employeeName").value.trim();
   const vehicle=$("vehicleNo").value.trim();
+  const missing=$("stickerMissingCheck").checked;
 
   if(!name||!vehicle){
     setSubmitMessage("성명과 차량번호를 입력해 주세요.","error");
     return;
   }
 
-  const missing=$("stickerMissingCheck").checked;
-  const s=S.analyzedSelection||S.selection||{x:0,y:0,width:1,height:1};
+  if(!S.plateSelection){
+    setSubmitMessage("번호판 영역을 먼저 지정해 주세요.","error");
+    return;
+  }
 
-  const meta={
-    employee_name:name,
-    employee_id:$("employeeId").value.trim(),
-    department:$("department").value.trim(),
-    vehicle_no:vehicle,
-    sticker_id:S.sticker.id,
-    crop_x:s.x,
-    crop_y:s.y,
-    crop_width:s.width,
-    crop_height:s.height,
-    sticker_missing:missing,
-    score:S.analysis.score,
-    status:S.analysis.status,
-    findings:S.analysis.findings,
-    metrics:{
-      ...S.analysis.metrics,
-      plateConfirmed:!!S.plateSelection,
-      plateVisibilityScore:Number(S.plateVisibility?.score||0),
-      plateCrop:S.plateSelection
-    }
-  };
-
-  const fd=new FormData();
-  fd.append("meta",JSON.stringify(meta));
-  fd.append("file",S.photoBlob,"inspection.jpg");
+  if(!missing&&!S.selection){
+    setSubmitMessage("스티커 영역을 먼저 지정해 주세요.","error");
+    return;
+  }
 
   $("submitBtn").disabled=true;
-  setSubmitMessage("저장 중입니다...","info");
+  $("backToSelectionBtn").disabled=true;
+  setSubmitMessage("점검사진을 제출하고 있습니다...","info");
 
   try{
+    // The analysis is computed only for the admin record.
+    // No result values are rendered to the employee UI.
+    await buildAdminOnlyAnalysis();
+
+    const s=S.analyzedSelection||S.selection||{x:0,y:0,width:1,height:1};
+
+    const stickerQuality=missing
+      ? {score:100,width:0,height:0,tooSmall:false,lowDetail:false}
+      : analyzeRegionVisibility(S.photoImage,S.selection,"sticker");
+
+    const plateQuality=analyzeRegionVisibility(S.photoImage,S.plateSelection,"plate");
+
+    const meta={
+      employee_name:name,
+      employee_id:$("employeeId").value.trim(),
+      department:$("department").value.trim(),
+      vehicle_no:vehicle,
+      sticker_id:S.sticker.id,
+      crop_x:s.x,
+      crop_y:s.y,
+      crop_width:s.width,
+      crop_height:s.height,
+      sticker_missing:missing,
+      score:S.analysis.score,
+      status:S.analysis.status,
+      findings:S.analysis.findings,
+      metrics:{
+        ...S.analysis.metrics,
+        userAnalysisHidden:true,
+        stickerCaptureQuality:stickerQuality,
+        plateConfirmed:true,
+        plateVisibilityScore:Number(plateQuality.score||0),
+        plateCaptureQuality:plateQuality,
+        plateCrop:S.plateSelection,
+        userStickerCrop:S.selection
+      }
+    };
+
+    const fd=new FormData();
+    fd.append("meta",JSON.stringify(meta));
+    fd.append("file",S.photoBlob,"inspection.jpg");
+
     const r=await fetchTimeout("/api/inspection",{method:"POST",body:fd},30000);
     const d=await r.json();
 
     if(!r.ok)throw new Error(d.error||"저장 실패");
 
-    setSubmitMessage(`제출 완료 · 접수번호 #${d.id}`,"success");
+    setSubmitMessage(`제출 완료 · 접수번호 #${d.id} · 관리자가 점검결과를 확인합니다.`,"success");
+    $("submitBtn").textContent="제출 완료";
   }catch(e){
     setSubmitMessage(`${e.message} 다시 시도해 주세요.`,"error");
-  }finally{
     $("submitBtn").disabled=false;
+    $("backToSelectionBtn").disabled=false;
   }
 }
 
@@ -1378,6 +1509,7 @@ function resetAllAfterPhoto(){
   S.plateVisibility=null;
   S.draftSelection=null;
   S.selectionMode="sticker";
+  if($("submissionSection"))$("submissionSection").classList.add("hidden");
 }
 
 function defaultRules(){

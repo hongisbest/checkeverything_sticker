@@ -92,7 +92,7 @@
   <div class="message info">
     사진에서 <b>① 홍보스티커 ② 차량번호판</b>을 각각 지정해 주세요.
     번호판은 사진에 제대로 노출되었는지 확인하는 용도이고,
-    스티커는 정상 스티커 원본과 정상부착 예시사진을 기준으로 부착상태를 분석합니다.
+    스티커는 제출 후 정상 스티커 원본과 정상부착 예시사진을 기준으로 관리자용 분석이 진행됩니다.
   </div>
 
   <div class="selection-mode-bar">
@@ -125,43 +125,72 @@
     스티커와 번호판 두 영역을 모두 확인해야 분석할 수 있습니다.
   </div>
 
-  <button id="analyzeBtn" class="btn primary full" style="margin-top:12px" disabled>필수영역 확인 후 스티커 비교분석</button>
+  <button id="analyzeBtn" class="btn primary full" style="margin-top:12px" disabled>선택영역 확인하고 제출하기</button>
 </section>
 
-<section id="analysisSection" class="card hidden">
+<section id="submissionSection" class="card hidden">
   <div class="section-head">
-    <div><span class="step">STEP 05</span><h2>자동 비교 결과</h2></div>
-    <span id="resultStatus" class="badge">분석중</span>
+    <div><span class="step">STEP 05</span><h2>제출 전 촬영내용 확인</h2></div>
+    <span class="badge">판정결과는 관리자 확인</span>
   </div>
 
-  <div class="result-layout">
-    <div>
-      <span class="step">FULL PHOTO</span>
-      <div id="resultPhoto" class="result-photo"></div>
+  <div class="message info">
+    아래 두 영역이 실제 점검대상과 맞는지만 확인해 주세요.
+    스티커의 정상/손상 여부는 제출 후 관리자 화면에서만 확인됩니다.
+  </div>
+
+  <div class="capture-review-grid">
+    <div class="capture-review-card">
+      <div class="capture-review-head">
+        <div>
+          <span class="step">STICKER</span>
+          <h3>홍보스티커 확인</h3>
+        </div>
+        <span id="reviewStickerState" class="pill normal">확인완료</span>
+      </div>
+      <div id="reviewStickerCrop" class="capture-review-image"></div>
+      <div id="reviewStickerQuality" class="message info">스티커 촬영영역을 확인해 주세요.</div>
     </div>
-    <div>
-      <span class="step">NORMALIZED STICKER AREA</span>
-      <div id="resultCrop" class="result-crop"></div>
+
+    <div class="capture-review-card">
+      <div class="capture-review-head">
+        <div>
+          <span class="step">LICENSE PLATE</span>
+          <h3>차량번호판 확인</h3>
+        </div>
+        <span id="reviewPlateState" class="pill normal">확인완료</span>
+      </div>
+      <div id="reviewPlateCrop" class="capture-review-image"></div>
+      <div id="reviewPlateQuality" class="message info">번호판 촬영영역을 확인해 주세요.</div>
     </div>
   </div>
 
-  <div class="analysis-grid">
-    <div class="metric"><span>종합점수</span><strong id="scoreValue">-</strong></div>
-    <div class="metric"><span>검출신뢰도</span><strong id="confidenceValue">-</strong></div>
-    <div class="metric"><span>구조 손상지수</span><strong id="damageValue">-</strong></div>
-    <div class="metric"><span>구조 보존율</span><strong id="shapeValue">-</strong></div>
-    <div class="metric"><span>색상차이</span><strong id="colorValue">-</strong></div>
+  <div class="final-review-check">
+    <strong>제출 전 확인</strong>
+    <span>번호판과 홍보스티커가 알아볼 수 있을 정도로 선명하고, 선택영역이 실제 위치와 맞으면 제출해 주세요.</span>
   </div>
 
-  <div id="findings" class="findings"></div>
-
-  <div class="message warn">
-    구조 손상지수는 정상 스티커 원본에서 확인되는 구조 중 정상부착 예시사진에서 안정적으로 보존되는 영역이 실제 점검사진에서 유의미하게 사라진 비율입니다.
-    검출신뢰도가 낮으면 손상으로 억지 판정하지 않고 판정불가로 구분합니다.
+  <div class="submission-actions">
+    <button id="backToSelectionBtn" class="btn">영역 다시 확인</button>
+    <button id="submitBtn" class="btn primary">점검사진 제출</button>
   </div>
 
-  <button id="submitBtn" class="btn primary full" style="margin-top:14px">점검결과 제출</button>
-  <div id="submitMessage" class="message info">원본 차량사진, 스티커/번호판 확인영역, 분석결과가 저장됩니다.</div>
+  <div id="submitMessage" class="message info">
+    제출된 사진의 스티커 부착상태 분석결과는 관리자 화면에서만 확인됩니다.
+  </div>
+</section>
+
+<!-- 내부 분석용: 사용자에게는 절대 표시하지 않음 -->
+<section id="analysisSection" class="hidden" aria-hidden="true" style="display:none!important">
+  <span id="resultStatus"></span>
+  <div id="resultPhoto"></div>
+  <div id="resultCrop"></div>
+  <strong id="scoreValue"></strong>
+  <strong id="confidenceValue"></strong>
+  <strong id="damageValue"></strong>
+  <strong id="shapeValue"></strong>
+  <strong id="colorValue"></strong>
+  <div id="findings"></div>
 </section>
 
 </main>
