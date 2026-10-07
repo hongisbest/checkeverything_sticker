@@ -302,3 +302,76 @@ body.modal-open{overflow:hidden}
 .phone-rotate-icon{display:flex;align-items:center;justify-content:center;width:50px;height:50px;border:2px solid rgba(255,255,255,.85);border-radius:14px;font-size:28px}
 .portrait-guide strong{font-size:16px}.portrait-guide span{max-width:420px;color:#dbe4ef;font-size:12px;line-height:1.55}
 @media(max-width:600px){.landscape-camera-controls{grid-template-columns:1fr 1fr}.landscape-camera-controls #captureBtn{grid-column:1/-1}}
+
+/* ===== V8 compact landscape camera ===== */
+.landscape-camera-stage{
+  width:min(100%,760px);
+  margin-left:auto;
+  margin-right:auto;
+  aspect-ratio:16/9;
+}
+.landscape-camera-controls{
+  width:min(100%,760px);
+  margin-left:auto;
+  margin-right:auto;
+  grid-template-columns:1fr 1fr;
+}
+.compact-orientation-message{
+  width:min(100%,760px);
+  margin-left:auto;
+  margin-right:auto;
+}
+@media (orientation:landscape) and (max-height:600px){
+  .camera-stage.landscape-camera-stage{
+    width:auto;
+    height:min(49dvh,235px);
+    max-width:72vw;
+    aspect-ratio:16/9;
+  }
+  .camera-stage.landscape-camera-stage video{object-fit:contain}
+  .landscape-camera-controls{
+    width:min(72vw,418px);
+    margin-top:7px;
+    gap:7px;
+  }
+  .landscape-camera-controls .btn{
+    min-height:38px;
+    padding:0 10px;
+    font-size:12px;
+  }
+  .compact-orientation-message{
+    width:min(72vw,418px);
+    margin-top:7px;
+    padding:7px 9px;
+    font-size:10px;
+    line-height:1.35;
+  }
+  .landscape-frame-guide{inset:4%}
+  .landscape-frame-guide span{
+    top:5px;left:5px;padding:3px 5px;font-size:8px;
+  }
+  .card:has(#cameraStage){padding:12px 14px}
+  .card:has(#cameraStage) .section-head{margin-bottom:8px}
+  .card:has(#cameraStage) .section-head h2{font-size:16px}
+  .card:has(#cameraStage) .section-head .step{font-size:8px}
+  .card:has(#cameraStage) > label.btn.full{
+    width:min(72vw,418px);
+    margin-left:auto;
+    margin-right:auto;
+    min-height:34px;
+    font-size:11px;
+  }
+}
+@media (orientation:landscape) and (max-height:450px){
+  .camera-stage.landscape-camera-stage{
+    height:min(45dvh,195px);
+    max-width:65vw;
+  }
+  .landscape-camera-controls,
+  .compact-orientation-message,
+  .card:has(#cameraStage) > label.btn.full{
+    width:min(65vw,347px);
+  }
+  .compact-orientation-message{display:none}
+}
+
