@@ -83,9 +83,16 @@ function bind(){
 function enableAutoStickerRoiUi(){
   const stickerBtn=$("stickerModeBtn");
   const resetStickerBtn=$("resetStickerBtn");
+  const missing=$("stickerMissingCheck");
 
   if(stickerBtn)stickerBtn.style.display="none";
   if(resetStickerBtn)resetStickerBtn.style.display="none";
+
+  if(missing){
+    missing.checked=false;
+    const label=missing.closest("label");
+    if(label)label.style.display="none";
+  }
 
   if($("plateModeBtn")){
     $("plateModeBtn").textContent="번호판 영역 지정";
@@ -93,24 +100,28 @@ function enableAutoStickerRoiUi(){
   }
 
   if($("stickerSelectionState")){
-    $("stickerSelectionState").textContent="스티커 자동탐색";
-    $("stickerSelectionState").className="pill";
+    $("stickerSelectionState").textContent="스티커 자동점검";
+    $("stickerSelectionState").className="pill normal";
   }
 
   const info=document.querySelector("#selectionSection .message.info");
   if(info){
     info.innerHTML=
       "사진에서 <b>차량번호판만 지정</b>해 주세요. "+
-      "홍보스티커는 선택한 차종의 정상 예시사진을 기준으로 자동 탐색합니다. "+
-      "직원이 스티커 영역을 직접 지정할 필요가 없습니다.";
+      "스티커는 시스템이 자동으로 찾습니다. "+
+      "운전석·조수석은 스티커 존재/30% 이상 훼손만, 후면은 존재/훼손/차량로고 오른쪽 위치/규격만 확인합니다.";
   }
 
   const title=document.querySelector("#selectionSection .section-head h2");
-  if(title)title.textContent="번호판 영역 확인";
+  if(title)title.textContent="번호판 확인";
 
-  if($("requiredAreaMessage")){
-    $("requiredAreaMessage").textContent=
-      "번호판을 지정하면 스티커 예상영역이 자동으로 표시됩니다.";
+  const stickerReview=$("reviewStickerCrop")?.closest(".capture-review-card");
+  if(stickerReview)stickerReview.style.display="none";
+
+  const reviewInfo=document.querySelector("#submissionSection .message.info");
+  if(reviewInfo){
+    reviewInfo.textContent=
+      "차량번호판만 확인해 주세요. 스티커 상태는 제출 후 자동분석되어 관리자 화면에만 표시됩니다.";
   }
 }
 
@@ -353,7 +364,12 @@ async function preparePhoto(blob){
 
   const vehicleExample=getVehicleExample();
   if(!vehicleExample||!vehicleExample.calibrated){
-    alert(`${vehicleLabel(S.vehicleType)} 정상 예시사진의 스티커 영역이 아직 설정되지 않았습니다. 관리자에게 문의해 주세요.`);
+    alert(`${vehicleLabel(S.vehicleType)} 정상 예시사진의 스티커 기준영역이 아직 설정되지 않았습니다. 관리자에게 문의해 주세요.`);
+    return;
+  }
+
+  if(S.sticker.side_hint==="rear"&&!vehicleExample.logo_calibrated){
+    alert(`${vehicleLabel(S.vehicleType)} 후면 정상 예시사진의 차량로고 영역이 아직 설정되지 않았습니다. 관리자에게 문의해 주세요.`);
     return;
   }
 
@@ -361,6 +377,16 @@ async function preparePhoto(blob){
 
   S.photoBlob=blob;
   S.photoImage=await blobImage(blob);
+
+  const photoQuality=analyzePhotoUsability(S.photoImage);
+  if(!photoQuality.ok){
+    S.photoBlob=null;
+    S.photoImage=null;
+    $("cameraStatus").textContent="재촬영 필요";
+    alert(`사진 상태를 확인하기 어렵습니다. ${photoQuality.message}\n\n차량 부착면과 스티커가 선명하게 보이도록 다시 촬영해 주세요.`);
+    return;
+  }
+
   S.photoHash=visualHash64(S.photoImage);
   S.analyzedSelection=null;
   S.photoUrl=URL.createObjectURL(blob);
@@ -389,6 +415,7 @@ async function preparePhoto(blob){
   $("plateSelectionState").className="pill review";
 
   setSelectionMode("plate");
+  updateAutoStickerSelection();
   updateRequiredAreaState();
 
   $("selectionSection").scrollIntoView({behavior:"smooth"});
@@ -488,79 +515,22 @@ function getVehiclePlacementExample(sticker=S.sticker,vehicleType=S.vehicleType)
   if(!sticker||!vehicleType)return null;
 
   return (sticker.examples||[]).find(x=>
-    x.vehicle_type===vehicleType &&
-    x.calibrated &&
-    x.plate_calibrated
+    x.vehicle_type===vehicleType && x.calibrated
   ) || null;
 }
 
-function deriveStickerBoxFromPlate(example,plate){
-  if(!example||!plate)return null;
-
-  const ep={
-    x:Number(example.plate_x),
-    y:Number(example.plate_y),
-    width:Number(example.plate_width),
-    height:Number(example.plate_height)
-  };
-
-  const es={
-    x:Number(example.crop_x),
-    y:Number(example.crop_y),
-    width:Number(example.crop_width),
-    height:Number(example.crop_height)
-  };
-
-  if(
-    !Number.isFinite(ep.width)||!Number.isFinite(ep.height)||
-    !Number.isFinite(es.width)||!Number.isFinite(es.height)||
-    ep.width<=.005||ep.height<=.005||
-    es.width<=.005||es.height<=.005
-  )return null;
-
-  const epcx=ep.x+ep.width/2;
-  const epcy=ep.y+ep.height/2;
-  const escx=es.x+es.width/2;
-  const escy=es.y+es.height/2;
-
-  const widthRatio=es.width/ep.width;
-  const heightRatio=es.height/ep.height;
-  const offsetX=(escx-epcx)/ep.width;
-  const offsetY=(escy-epcy)/ep.height;
-
-  const pcx=plate.x+plate.width/2;
-  const pcy=plate.y+plate.height/2;
-
-  const width=plate.width*widthRatio;
-  const height=plate.height*heightRatio;
-  const scx=pcx+offsetX*plate.width;
-  const scy=pcy+offsetY*plate.height;
-
+function expandNormalizedBox(box,factor=1.18){
+  const cx=box.x+box.width/2;
+  const cy=box.y+box.height/2;
   return clampBox({
-    x:scx-width/2,
-    y:scy-height/2,
-    width,
-    height
+    x:cx-box.width*factor/2,
+    y:cy-box.height*factor/2,
+    width:box.width*factor,
+    height:box.height*factor
   });
 }
 
 function updateAutoStickerSelection(){
-  if($("stickerMissingCheck").checked){
-    S.selection=null;
-    $("stickerSelectionBox").classList.add("hidden");
-    $("stickerSelectionState").textContent="스티커 없음";
-    $("stickerSelectionState").className="pill normal";
-    return;
-  }
-
-  if(!S.plateSelection){
-    S.selection=null;
-    $("stickerSelectionBox").classList.add("hidden");
-    $("stickerSelectionState").textContent="스티커 자동탐색 대기";
-    $("stickerSelectionState").className="pill";
-    return;
-  }
-
   const example=getVehiclePlacementExample();
 
   if(!example){
@@ -571,20 +541,17 @@ function updateAutoStickerSelection(){
     return;
   }
 
-  const predicted=deriveStickerBoxFromPlate(example,S.plateSelection);
+  // This is only a search seed. It is NOT a user-selected sticker crop and
+  // does not depend on the number plate.
+  S.selection=expandNormalizedBox({
+    x:Number(example.crop_x),
+    y:Number(example.crop_y),
+    width:Number(example.crop_width),
+    height:Number(example.crop_height)
+  },1.18);
 
-  if(!predicted){
-    S.selection=null;
-    $("stickerSelectionBox").classList.add("hidden");
-    $("stickerSelectionState").textContent="자동계산 실패";
-    $("stickerSelectionState").className="pill review";
-    return;
-  }
-
-  S.selection=predicted;
-  renderBox($("stickerSelectionBox"),S.selection);
-  $("stickerSelectionBox").classList.remove("hidden");
-  $("stickerSelectionState").textContent="스티커 예상영역";
+  $("stickerSelectionBox").classList.add("hidden");
+  $("stickerSelectionState").textContent="스티커 자동점검";
   $("stickerSelectionState").className="pill normal";
 }
 
@@ -639,22 +606,18 @@ function toggleMissing(){
 }
 
 function updateRequiredAreaState(){
-  const missing=$("stickerMissingCheck").checked;
   const plateOk=!!S.plateSelection;
-  const autoStickerOk=missing||!!S.selection;
+  const autoReady=!!S.selection;
 
-  $("analyzeBtn").disabled=!(plateOk&&autoStickerOk);
+  $("analyzeBtn").disabled=!(plateOk&&autoReady);
 
-  if(plateOk&&autoStickerOk){
+  if(plateOk&&autoReady){
     const weakPlate=S.plateVisibility&&S.plateVisibility.score<22;
-
     $("selectionStatus").textContent="번호판 확인완료";
     $("requiredAreaMessage").className=`message ${weakPlate?"warn":"success"}`;
-    $("requiredAreaMessage").textContent=missing
-      ? "번호판이 확인되었습니다. 스티커 없음 상태로 제출할 수 있습니다."
-      : (weakPlate
-          ? "번호판 영역이 작거나 흐릴 수 있습니다. 번호판을 읽을 수 있는지 확인해 주세요. 스티커 예상영역은 자동 계산되었습니다."
-          : "번호판 확인완료. 스티커는 정상 예시 기준으로 자동 탐색합니다.");
+    $("requiredAreaMessage").textContent=weakPlate
+      ? "번호판이 작거나 흐릴 수 있습니다. 번호판이 읽히도록 다시 지정해 주세요."
+      : "번호판 확인완료. 스티커 영역은 따로 지정하지 않아도 됩니다.";
   }else if(!plateOk){
     $("selectionStatus").textContent="번호판 확인 필요";
     $("requiredAreaMessage").className="message warn";
@@ -663,7 +626,7 @@ function updateRequiredAreaState(){
     $("selectionStatus").textContent="자동기준 확인 필요";
     $("requiredAreaMessage").className="message error";
     $("requiredAreaMessage").textContent=
-      "선택한 차종의 정상 예시에 스티커 영역과 번호판 영역이 모두 설정되어 있어야 자동분석할 수 있습니다.";
+      "관리자 정상 예시사진의 스티커 기준영역을 확인해 주세요.";
   }
 }
 
@@ -860,7 +823,7 @@ function openSubmissionReview(){
     }
 
     if(!missing&&!S.selection){
-      throw new Error("스티커 자동영역을 계산하지 못했습니다. 관리자 정상예시의 스티커/번호판 영역 설정을 확인해 주세요.");
+      throw new Error("스티커 자동분석 기준을 불러오지 못했습니다. 관리자 정상예시의 스티커 영역 설정을 확인해 주세요.");
     }
 
     renderSubmissionReview();
@@ -880,29 +843,6 @@ function backToSelection(){
 }
 
 function renderSubmissionReview(){
-  const missing=$("stickerMissingCheck").checked;
-
-  if(missing){
-    $("reviewStickerCrop").innerHTML=`
-      <div class="capture-review-empty">
-        <strong>홍보스티커 없음</strong>
-        <span>사용자가 ‘스티커 없음’을 선택했습니다.</span>
-      </div>
-    `;
-    $("reviewStickerState").textContent="스티커 없음";
-    $("reviewStickerState").className="pill review";
-    $("reviewStickerQuality").className="message warn";
-    $("reviewStickerQuality").textContent="실제 차량에 홍보스티커가 없는 경우에만 이 상태로 제출해 주세요.";
-  }else{
-    const stickerQuality=analyzeRegionVisibility(S.photoImage,S.selection,"sticker");
-    renderReviewCrop("reviewStickerCrop",S.selection,"홍보스티커");
-    $("reviewStickerState").textContent="자동 예상영역";
-    $("reviewStickerState").className="pill normal";
-    $("reviewStickerQuality").className="message info";
-    $("reviewStickerQuality").textContent=
-      "직접 지정한 영역이 아닙니다. 번호판과 동일 차종 정상 예시를 기준으로 계산한 예상영역이며, 제출 후 주변을 자동 탐색합니다.";
-  }
-
   const plateQuality=analyzeRegionVisibility(S.photoImage,S.plateSelection,"plate");
   renderReviewCrop("reviewPlateCrop",S.plateSelection,"차량번호판");
   $("reviewPlateState").textContent="영역 확인완료";
@@ -932,6 +872,71 @@ function renderReviewCrop(targetId,selection,label){
   $(targetId).innerHTML=`
     <img src="${url}" alt="${label} 확인영역">
   `;
+}
+
+function analyzePhotoUsability(img){
+  if(!img){
+    return{ok:false,message:"사진을 읽지 못했습니다.",sharpness:0,brightness:0};
+  }
+
+  const iw=Number(img.naturalWidth||img.width||0);
+  const ih=Number(img.naturalHeight||img.height||0);
+
+  if(Math.min(iw,ih)<520){
+    return{
+      ok:false,
+      message:"사진 해상도가 너무 낮습니다.",
+      sharpness:0,
+      brightness:0
+    };
+  }
+
+  const W=320;
+  const H=Math.max(180,Math.round(W*ih/Math.max(1,iw)));
+  const c=document.createElement("canvas");
+  c.width=W;
+  c.height=Math.min(320,H);
+
+  const ctx=c.getContext("2d",{willReadFrequently:true});
+  ctx.drawImage(img,0,0,c.width,c.height);
+
+  const rgba=ctx.getImageData(0,0,c.width,c.height).data;
+  const gray=new Float32Array(c.width*c.height);
+
+  let sum=0;
+  for(let p=0,i=0;p<gray.length;p++,i+=4){
+    const g=.299*rgba[i]+.587*rgba[i+1]+.114*rgba[i+2];
+    gray[p]=g;
+    sum+=g;
+  }
+
+  const brightness=sum/Math.max(1,gray.length);
+  let grad=0,count=0;
+
+  for(let y=1;y<c.height-1;y++){
+    for(let x=1;x<c.width-1;x++){
+      const p=y*c.width+x;
+      grad+=Math.abs(gray[p+1]-gray[p-1])+
+            Math.abs(gray[p+c.width]-gray[p-c.width]);
+      count++;
+    }
+  }
+
+  const sharpness=grad/Math.max(1,count);
+
+  if(brightness<18){
+    return{ok:false,message:"사진이 너무 어두워 형상을 확인하기 어렵습니다.",sharpness,brightness};
+  }
+
+  if(brightness>247){
+    return{ok:false,message:"사진이 너무 밝아 형상이 날아갔습니다.",sharpness,brightness};
+  }
+
+  if(sharpness<7){
+    return{ok:false,message:"사진이 많이 흔들리거나 초점이 맞지 않았습니다.",sharpness,brightness};
+  }
+
+  return{ok:true,message:"",sharpness:r1(sharpness),brightness:r1(brightness)};
 }
 
 function analyzeRegionVisibility(img,s,type){
@@ -1439,40 +1444,34 @@ function compareNormalizedStructureFast(masterDescriptor,imageOrCanvas){
   };
 }
 
-function autoStickerSearchVariants(base,plate,sideHint){
+function autoStickerSearchVariants(base){
   const boxes=[];
-
-  const scales=[.78,.90,1,1.12,1.26];
-  const xShifts=[-1.25,-.70,0,.70,1.25];
-  const yShifts=[-.75,0,.75];
+  const scales=[.50,.70,.90,1.15,1.45,1.80];
+  const centersX=[.08,.22,.36,.50,.64,.78,.92];
+  const centersY=[.08,.24,.40,.56,.72,.88];
 
   for(const scale of scales){
-    for(const dx of xShifts){
-      for(const dy of yShifts){
-        boxes.push(scaleBox(base,scale,dx,dy));
+    const width=clamp(base.width*scale,.035,.62);
+    const height=clamp(base.height*scale,.025,.62);
+
+    for(const cx of centersX){
+      for(const cy of centersY){
+        boxes.push(clampBox({
+          x:cx-width/2,
+          y:cy-height/2,
+          width,
+          height
+        }));
       }
     }
   }
 
-  // 후면 반대편 부착도 자동으로 찾아야 위치 미준수를 잡을 수 있다.
-  if(sideHint==="rear"&&plate){
-    const pcx=plate.x+plate.width/2;
-    const bcx=base.x+base.width/2;
-    const mirroredCenterX=pcx-(bcx-pcx);
-
-    const mirrored=clampBox({
-      x:mirroredCenterX-base.width/2,
-      y:base.y,
-      width:base.width,
-      height:base.height
-    });
-
-    for(const scale of [.85,1,1.15]){
-      for(const dx of [-.45,0,.45]){
-        boxes.push(scaleBox(mirrored,scale,dx,0));
-      }
-    }
-  }
+  // Always include the normal-example position itself and close variants.
+  boxes.push(
+    scaleBox(base,.75,0,0),
+    scaleBox(base,1,0,0),
+    scaleBox(base,1.25,0,0)
+  );
 
   return uniqueBoxes(boxes);
 }
@@ -1897,7 +1896,7 @@ async function submitInspection(event){
 
     const name=$("employeeName").value.trim();
     const vehicle=$("vehicleNo").value.trim();
-    const missing=$("stickerMissingCheck").checked;
+    const missing=false;
 
     if(!name||!vehicle){
       throw new UserSubmitError("성명과 차량번호를 입력해 주세요.","profile");
@@ -1919,7 +1918,7 @@ async function submitInspection(event){
 
     if(!missing&&!S.selection){
       throw new UserSubmitError(
-        "스티커 자동영역을 계산하지 못했습니다. 관리자 정상예시의 스티커/번호판 영역 설정을 확인해 주세요.",
+        "스티커 자동분석 기준을 불러오지 못했습니다. 관리자 정상예시의 스티커 영역 설정을 확인해 주세요.",
         "selection"
       );
     }
@@ -1945,28 +1944,22 @@ async function submitInspection(event){
       );
     }
 
-    let stickerQuality={
-      score:100,
-      width:0,
-      height:0,
-      tooSmall:false,
-      lowDetail:false
-    };
-
-    if(!missing){
-      stickerQuality=analyzeRegionVisibility(
-        S.photoImage,
-        S.selection,
-        "sticker"
+    const photoQuality=analyzePhotoUsability(S.photoImage);
+    if(!photoQuality.ok){
+      throw new UserSubmitError(
+        `사진 품질을 확인하기 어렵습니다. ${photoQuality.message} 차량 부착면과 스티커가 선명하게 보이도록 다시 촬영해 주세요.`,
+        "selection"
       );
-
-      if(stickerQuality.tooSmall||stickerQuality.score<10){
-        throw new UserSubmitError(
-          "스티커 영역이 제대로 지정되지 않았거나 너무 작게 촬영되었습니다. 홍보스티커 전체가 보이도록 영역을 다시 지정해 주세요.",
-          "selection"
-        );
-      }
     }
+
+    const stickerQuality={
+      score:100,
+      width:S.photoImage.naturalWidth,
+      height:S.photoImage.naturalHeight,
+      tooSmall:false,
+      lowDetail:false,
+      photoQuality
+    };
 
     // Snapshot for admin-only analysis after the raw data has been stored.
     const analysisSnapshot={
@@ -1978,6 +1971,7 @@ async function submitInspection(event){
       plateSelection:{...S.plateSelection},
       missing,
       stickerQuality,
+      photoQuality,
       plateQuality
     };
 
@@ -2010,7 +2004,7 @@ async function submitInspection(event){
       plateVisibilityScore:Number(plateQuality.score||0),
       plateCaptureQuality:plateQuality,
       plateCrop:S.plateSelection,
-      userStickerCrop:S.selection
+      userStickerCrop:null
     };
 
     const selected=S.selection||{
@@ -2363,7 +2357,7 @@ async function runBackgroundAdminAnalysis(id,token,snapshot){
     plateCaptureQuality:snapshot.plateQuality,
     plateCrop:snapshot.plateSelection,
     userStickerCrop:snapshot.selection,
-    stickerRoiMode:"auto-from-plate",
+    stickerRoiMode:"automatic-search",
     detectedStickerCrop:analysis.metrics?.detectedStickerCrop||null
   };
 
@@ -2459,314 +2453,165 @@ async function buildSnapshotAnalysis(snapshot){
 async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
   const reference=await getVehicleReferenceBundle(snapshot,examples[0]);
   const masterDescriptor=reference.masterDescriptor;
-  const normalRecords=[reference.normalRecord];
+  const normalRecord=reference.normalRecord;
   const calibration=reference.calibration;
+  const example=normalRecord.ex;
 
-  const base=stabilizeSelection(
+  // Search seed comes from the normal example only; it is independent of plate ROI.
+  const seed=stabilizeSelection(
     snapshot.selection,
     snapshot.photoImage.naturalWidth,
     snapshot.photoImage.naturalHeight,
     masterDescriptor.W/masterDescriptor.H
   );
 
-  const candidates=autoStickerSearchVariants(
-    base,
-    snapshot.plateSelection,
-    snapshot.sticker.side_hint
+  const stickerBest=await detectBestStickerCandidate(
+    snapshot.photoImage,
+    masterDescriptor,
+    normalRecord,
+    calibration,
+    seed
   );
 
-  // 1차: 싼 HOG 비교로 넓은 후보영역을 빠르게 탐색
-  const coarse=[];
-
-  for(let i=0;i<candidates.length;i++){
-    const box=candidates[i];
-    const canvas=cropBoxCanvas(snapshot.photoImage,box,900);
-    const cmp=compareNormalizedStructureFast(masterDescriptor,canvas);
-    const nearest=findNearestNormalExample(cmp,normalRecords,masterDescriptor,calibration);
-
-    coarse.push({
-      box,
-      coarseScore:nearest?.matchScore||0
-    });
-
-    if(i%8===0)await yieldToBrowser();
+  if(!stickerBest){
+    throw new Error("스티커 탐색을 완료하지 못했습니다.");
   }
 
-  coarse.sort((a,b)=>b.coarseScore-a.coarseScore);
-
-  // 2차: 상위 후보만 기존 정밀 정렬 비교
-  const finalists=coarse.slice(0,4);
-  let best=null;
-
-  for(const item of finalists){
-    const canvas=cropBoxCanvas(snapshot.photoImage,item.box,1000);
-    const cmp=await compareNormalizedStructureResponsive(masterDescriptor,canvas);
-    const nearest=findNearestNormalExample(cmp,normalRecords,masterDescriptor,calibration);
-
-    if(!best||nearest.matchScore>best.nearest.matchScore){
-      best={box:item.box,cmp,nearest};
-    }
-
-    await yieldToBrowser();
-  }
-
-  if(!best||!best.nearest){
-    throw new Error("스티커 비교영역을 계산하지 못했습니다.");
-  }
-
-  const nearestRecord=best.nearest.record;
   const residual=buildAngleAdjustedResidual(
-    best.cmp,
-    nearestRecord.cmp,
+    stickerBest.cmp,
+    normalRecord.cmp,
     calibration,
     masterDescriptor
   );
 
-  const damage=angleAdjustedDamageIndex(residual);
-  const preservation=nearestAdjustedPreservation(
-    best.cmp,
-    nearestRecord.cmp,
+  const damage=r1(angleAdjustedDamageIndex(residual));
+  const preservation=r1(nearestAdjustedPreservation(
+    stickerBest.cmp,
+    normalRecord.cmp,
     calibration
-  );
-  const designSimilarity=designFidelityScore(
-    best.cmp,
-    nearestRecord.cmp,
+  ));
+  const designSimilarity=r1(designFidelityScore(
+    stickerBest.cmp,
+    normalRecord.cmp,
     residual,
     calibration,
     masterDescriptor
-  );
+  ));
 
-  const confidence=r1(clamp(best.nearest.matchScore*100,0,100));
+  const confidence=r1(clamp(stickerBest.matchScore*100,0,100));
+  const presenceScore=r1(clamp(confidence*.55+designSimilarity*.45,0,100));
+  const stickerDetected=presenceScore>=52;
 
-  const detectedSnapshot={
-    ...snapshot,
-    selection:best.box
-  };
-
-  const placement=placementSimilarityScore(detectedSnapshot,normalRecords);
-  const rearGeometry=snapshot.sticker.side_hint==="rear"
-    ? rearGeometryComparison(detectedSnapshot,normalRecords)
-    : null;
-
-  const designCalibration=calibrateNormalDesignRange(
-    normalRecords,
-    calibration,
-    masterDescriptor,
-    snapshot.rules||defaultRules(),
-    confidence
-  );
-
-  const metrics={
-    damage:r1(damage),
-    shape:r1(preservation),
-    designSimilarity:r1(designSimilarity),
-    designThreshold:r1(designCalibration.threshold),
-    designNormalMedian:r1(designCalibration.median),
-    designNormalQ25:r1(designCalibration.q25),
-    designNormalMin:r1(designCalibration.minimum),
-    designCalibrationCount:designCalibration.count,
-    designCalibrationMode:designCalibration.mode,
-    placementSimilarity:Number.isFinite(placement?.score)?r1(placement.score):null,
-    rearGeometrySimilarity:Number.isFinite(rearGeometry?.score)?r1(rearGeometry.score):null,
-    rearSizeDifference:Number.isFinite(rearGeometry?.sizeDifferencePct)?r1(rearGeometry.sizeDifferencePct):null,
-    rearWidthDifference:Number.isFinite(rearGeometry?.widthDifferencePct)?r1(rearGeometry.widthDifferencePct):null,
-    rearHeightDifference:Number.isFinite(rearGeometry?.heightDifferencePct)?r1(rearGeometry.heightDifferencePct):null,
-    rearOffsetDifference:Number.isFinite(rearGeometry?.offsetDifference)?r1(rearGeometry.offsetDifference):null,
-    rearHorizontalDifference:Number.isFinite(rearGeometry?.horizontalDifference)?r1(rearGeometry.horizontalDifference):null,
-    rearVerticalDifference:Number.isFinite(rearGeometry?.verticalDifference)?r1(rearGeometry.verticalDifference):null,
-    rearSideMismatch:rearGeometry?.sideMismatch===true,
-    rearUserSide:rearGeometry?.userSide||null,
-    rearNormalSide:rearGeometry?.normalSide||null,
-    stickerRoiMode:"auto-from-plate",
-    autoExpectedStickerCrop:snapshot.selection,
-    detectedStickerCrop:best.box,
-    color:null,
-    confidence,
-    vehicleType:snapshot.vehicleType,
-    sideHint:snapshot.sticker.side_hint,
-    rawStructureDifference:r1((1-best.cmp.global)*100),
-    nearestExampleId:Number(nearestRecord.ex.id),
-    nearestExampleSimilarity:r1(best.nearest.matchScore*100),
-    largestDamageCluster:r1(residual.largestClusterPct),
-    distributedDifference:r1(residual.distributedPct),
-    stableCells:calibration.stableIndices.length,
-    normalExamples:1,
-    placementExamples:nearestRecord.ex.plate_calibrated?1:0,
-    missing:false
-  };
-
-  const rules=snapshot.rules||defaultRules();
   let status="정상";
   let recommendation="";
   const findings=[];
 
-  const isRear=snapshot.sticker.side_hint==="rear";
+  const metrics={
+    simpleInspectionV25:true,
+    stickerDetected,
+    presenceScore,
+    damage:stickerDetected?damage:100,
+    confidence,
+    shape:preservation,
+    designSimilarity,
+    color:null,
+    vehicleType:snapshot.vehicleType,
+    sideHint:snapshot.sticker.side_hint,
+    detectedStickerCrop:stickerBest.box,
+    photoQuality:snapshot.photoQuality||null,
+    missing:!stickerDetected,
+    rearLogoDetected:null,
+    rearLogoRight:null,
+    rearSizeDifference:null
+  };
 
-  if(confidence<58||calibration.stableIndices.length<12){
-    if(!isRear){
+  if(!stickerDetected){
+    status="확인필요";
+    recommendation="관리자 확인";
+    findings.push(
+      "사진 품질은 제출 가능 수준이나 정상 스티커 형상을 찾지 못했습니다. 미부착 가능성을 확인해 주세요."
+    );
+  }else if(damage>=30){
+    status="확인필요";
+    recommendation="교체 검토";
+    findings.push(`스티커 추정 훼손 ${damage}% → 30% 이상 훼손 여부 확인필요`);
+  }
+
+  if(snapshot.sticker.side_hint==="rear" && stickerDetected){
+    if(!example.logo_calibrated){
       status="판정불가";
-      findings.push(
-        "스티커 구조 검출신뢰도가 낮아 자동판정을 확정하지 않았습니다. 관리자가 원본 사진과 선택영역을 직접 확인해 주세요."
+      findings.push("후면 정상 예시사진에 차량로고 기준영역이 설정되지 않았습니다.");
+    }else{
+      const logoBox={
+        x:Number(example.logo_x),
+        y:Number(example.logo_y),
+        width:Number(example.logo_width),
+        height:Number(example.logo_height)
+      };
+
+      const logoCrop=cropImageElement(reference.exampleImage,logoBox,700);
+      const logoDescriptor=buildMasterDescriptor(logoCrop);
+
+      const logoBest=await detectBestGenericCandidate(
+        snapshot.photoImage,
+        logoDescriptor,
+        logoBox
       );
+
+      const logoDetected=Boolean(logoBest && logoBest.confidence>=46);
+      metrics.rearLogoDetected=logoDetected;
+      metrics.rearLogoConfidence=logoBest? r1(logoBest.confidence):0;
+
+      if(!logoDetected){
+        status="확인필요";
+        findings.push("차량로고를 자동으로 찾기 어려워 후면 부착위치를 관리자가 확인해야 합니다.");
+      }else{
+        const stickerCx=stickerBest.box.x+stickerBest.box.width/2;
+        const logoCx=logoBest.box.x+logoBest.box.width/2;
+        const isRight=stickerCx > logoCx + logoBest.box.width*.12;
+        metrics.rearLogoRight=isRight;
+
+        if(!isRight){
+          status="확인필요";
+          findings.push("후면 스티커가 차량로고 기준 오른쪽 위치에 있지 않습니다.");
+        }
+
+        const normalSizeRatio=Number(example.crop_width)/Math.max(.0001,Number(example.logo_width));
+        const currentSizeRatio=stickerBest.box.width/Math.max(.0001,logoBest.box.width);
+        const sizeDifference=r1(symmetricScaleDifferencePct(
+          currentSizeRatio/Math.max(.0001,normalSizeRatio)
+        ));
+
+        metrics.rearSizeDifference=sizeDifference;
+
+        if(sizeDifference>30){
+          status="확인필요";
+          findings.push(
+            `후면 스티커 규격차이 ${sizeDifference}% → 자체제작/규격상이 여부 확인필요`
+          );
+        }
+      }
     }
   }
 
-  if(isRear){
-    // 후면은 손상률/HOG 구조보존을 판정조건에서 제외한다.
-    // 정상 샘플에서 야간조명·후미등 반사·촬영각도만으로 오탐이 발생했기 때문이다.
-    // 후면 주판정: 존재여부(상위 단계) + 좌우 + 번호판 대비 규격 + 상대위치.
-    if(!Number.isFinite(metrics.rearGeometrySimilarity)){
-      status="판정불가";
+  if(status==="정상"){
+    if(snapshot.sticker.side_hint==="rear"){
       findings.push(
-        "후면 정상 예시의 번호판 기준영역이 없어 크기·부착위치 판정을 수행하지 못했습니다."
+        `후면 스티커 검출 · 훼손 ${damage}% · 차량로고 기준 오른쪽 · 규격 정상범위`
       );
     }else{
-      if(Number(rules.use_rear_geometry ?? 1)===1){
-        if(metrics.rearSideMismatch===true){
-          status="확인필요";
-          findings.push(
-            `후면 좌우 부착위치 불일치 → 정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)}`
-          );
-        }
-
-        if(metrics.rearSizeDifference>Number(rules.rear_size_difference_max ?? 18)){
-          status="확인필요";
-          findings.push(
-            `후면 스티커 규격 차이 ${metrics.rearSizeDifference}% → 정상 예시 대비 크기가 달라 임의제작·규격상이 여부 확인필요`
-          );
-        }
-
-        if(Number.isFinite(metrics.rearHorizontalDifference) &&
-           metrics.rearHorizontalDifference>42){
-          status="확인필요";
-          findings.push(
-            `후면 수평 위치차이 ${metrics.rearHorizontalDifference}% → 번호판 대비 좌우 위치 확인필요`
-          );
-        }
-
-        if(Number.isFinite(metrics.rearVerticalDifference) &&
-           metrics.rearVerticalDifference>65){
-          status="확인필요";
-          findings.push(
-            `후면 수직 위치차이 ${metrics.rearVerticalDifference}% → 번호판 대비 상하 위치 확인필요`
-          );
-        }
-
-        if(metrics.rearGeometrySimilarity<Number(rules.rear_geometry_min ?? 62)){
-          status="확인필요";
-          findings.push(
-            `후면 기준 유사도 ${metrics.rearGeometrySimilarity}% → 같은 차종 정상 예시 대비 크기·상대위치 확인필요`
-          );
-        }
-      }
-
-      // 정상 샘플은 야간/각도 차이로 디자인 점수가 60%대까지 내려갈 수 있어
-      // 후면에서는 매우 큰 형상 불일치만 보조적으로 임의제작 의심 처리한다.
-      const rearDesignFloor=50;
-      if(Number(rules.use_design ?? 1)===1 &&
-         metrics.designSimilarity<rearDesignFloor){
-        status="확인필요";
-        findings.push(
-          `후면 디자인 동일성 ${metrics.designSimilarity}% → 정상 원본과 형상이 크게 달라 임의제작 여부 확인필요`
-        );
-      }
-    }
-
-    if(status==="정상"&&!findings.length){
       findings.push(
-        `${vehicleLabel(snapshot.vehicleType)} 후면 정상 예시 대비 스티커 존재·좌우·규격·상대위치가 정상 범위입니다.`
-      );
-    }
-  }else if(status!=="판정불가"){
-    // 측면에서 정상 예시와 직접 유사도가 높고 디자인도 통과하면,
-    // ROI/조명 오차로 손상·구조가 기준을 소폭 벗어난 것만으로는 확인필요 처리하지 않는다.
-    const nearNormalExample=
-      metrics.nearestExampleSimilarity>=72 &&
-      metrics.designSimilarity>=metrics.designThreshold &&
-      metrics.damage<18 &&
-      metrics.shape>=65;
-
-    if(Number(rules.use_damage)===1){
-      if(metrics.damage>=Number(rules.damage_replace_min)){
-        status="확인필요";
-        recommendation="교체 권고";
-        findings.push(`보정 구조손상 ${metrics.damage}% → 교체 권고`);
-      }else if(
-        metrics.damage>Number(rules.damage_normal_max) &&
-        !nearNormalExample
-      ){
-        status="확인필요";
-        findings.push(`보정 구조손상 ${metrics.damage}% → 손상 여부 확인필요`);
-      }
-    }
-
-    if(Number(rules.use_design ?? 1)===1 &&
-       metrics.designSimilarity<metrics.designThreshold){
-      status="확인필요";
-      findings.push(
-        `디자인 동일성 ${metrics.designSimilarity}% < 차종별 기준 ${metrics.designThreshold}% → 기준 스티커와 폰트·로고·자간·그래픽 형상이 다를 가능성`
-      );
-    }
-
-    if(Number(rules.use_placement ?? 1)===1 &&
-       metrics.placementSimilarity!==null &&
-       metrics.placementSimilarity!==undefined &&
-       Number.isFinite(Number(metrics.placementSimilarity)) &&
-       metrics.placementSimilarity<Number(rules.placement_similarity_min ?? 55)){
-      status="확인필요";
-      findings.push(
-        `부착위치 유사도 ${metrics.placementSimilarity}% → ${vehicleLabel(snapshot.vehicleType)} 정상 예시 대비 위치·방향 확인필요`
-      );
-    }
-
-    if(
-      Number(rules.use_shape)===1 &&
-      metrics.shape<Number(rules.shape_similarity_min) &&
-      !nearNormalExample
-    ){
-      status="확인필요";
-      findings.push(`구조 보존율 ${metrics.shape}% → 로고·문구·그래픽 구조 확인필요`);
-    }
-
-    if(!findings.length){
-      findings.push(
-        `${vehicleLabel(snapshot.vehicleType)} 정상 예시사진과 비교한 결과 손상·디자인·부착위치에서 뚜렷한 이상징후가 없습니다.`
+        `스티커 검출 · 추정 훼손 ${damage}% → 30% 미만으로 정상범위`
       );
     }
   }
 
-  const placementForScore=isRear
-    ? (Number.isFinite(metrics.rearGeometrySimilarity) ? metrics.rearGeometrySimilarity : 0)
-    : (Number.isFinite(metrics.placementSimilarity) ? metrics.placementSimilarity : 100);
-
-  const designForScore=isRear
-    ? Math.max(metrics.designSimilarity,70)
-    : metrics.designSimilarity;
-
-  const rearComplianceScore=isRear
-    ? clamp(
-        placementForScore*.62+
-        designForScore*.18+
-        Math.max(confidence,65)*.20,
-        0,100
-      )
-    : null;
-
-  const score=status==="판정불가"
-    ? r1(isRear ? rearComplianceScore*.5 : confidence*.5)
-    : r1(isRear
-        ? rearComplianceScore
-        : clamp(
-            (100-metrics.damage)*.38+
-            designForScore*.30+
-            metrics.shape*.18+
-            placementForScore*.08+
-            confidence*.06,
-            0,100
-          ));
+  const score=status==="정상"
+    ? r1(clamp(100-damage,0,100))
+    : (stickerDetected ? r1(clamp(65-damage*.5,0,65)) : 0);
 
   return{
-    crop:best.box,
+    crop:stickerBest.box,
     analysis:{
       score,
       status,
@@ -2775,6 +2620,74 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
       metrics
     }
   };
+}
+
+async function detectBestStickerCandidate(photo,masterDescriptor,normalRecord,calibration,seed){
+  const candidates=autoStickerSearchVariants(seed);
+  const coarse=[];
+
+  for(let i=0;i<candidates.length;i++){
+    const box=candidates[i];
+    const canvas=cropBoxCanvas(photo,box,760);
+    const cmp=compareNormalizedStructureFast(masterDescriptor,canvas);
+    const nearest=findNearestNormalExample(cmp,[normalRecord],masterDescriptor,calibration);
+    const score=clamp(
+      Number(nearest?.matchScore||0)*.70+
+      Number(cmp.global||0)*.30,
+      0,1
+    );
+
+    coarse.push({box,score});
+    if(i%12===0)await yieldToBrowser();
+  }
+
+  coarse.sort((a,b)=>b.score-a.score);
+
+  let best=null;
+  for(const item of coarse.slice(0,6)){
+    const canvas=cropBoxCanvas(photo,item.box,1000);
+    const cmp=await compareNormalizedStructureResponsive(masterDescriptor,canvas);
+    const nearest=findNearestNormalExample(cmp,[normalRecord],masterDescriptor,calibration);
+    const score=clamp(
+      Number(nearest?.matchScore||0)*.72+
+      Number(cmp.global||0)*.28,
+      0,1
+    );
+
+    if(!best||score>best.matchScore){
+      best={box:item.box,cmp,matchScore:score};
+    }
+  }
+
+  return best;
+}
+
+async function detectBestGenericCandidate(photo,descriptor,seed){
+  const candidates=autoStickerSearchVariants(seed);
+  const coarse=[];
+
+  for(let i=0;i<candidates.length;i++){
+    const box=candidates[i];
+    const canvas=cropBoxCanvas(photo,box,640);
+    const cmp=compareNormalizedStructureFast(descriptor,canvas);
+    coarse.push({box,score:Number(cmp.global||0)});
+    if(i%14===0)await yieldToBrowser();
+  }
+
+  coarse.sort((a,b)=>b.score-a.score);
+
+  let best=null;
+  for(const item of coarse.slice(0,5)){
+    const canvas=cropBoxCanvas(photo,item.box,800);
+    const cmp=await compareNormalizedStructureResponsive(descriptor,canvas);
+    const score=Number(cmp.global||0);
+
+    if(!best||score>best.confidence/100){
+      best={box:item.box,confidence:score*100};
+    }
+  }
+
+  return best;
 }
 
 async function getVehicleReferenceBundle(snapshot,example){
@@ -2799,7 +2712,7 @@ async function getVehicleReferenceBundle(snapshot,example){
   const normalRecord={ex:example,cmp};
   const calibration=buildCalibration(masterDescriptor,[cmp]);
 
-  const bundle={masterDescriptor,normalRecord,calibration};
+  const bundle={masterDescriptor,normalRecord,calibration,exampleImage:img};
   S.referenceCache[key]=bundle;
   return bundle;
 }
