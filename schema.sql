@@ -117,6 +117,15 @@ CREATE TABLE IF NOT EXISTS st_example_vehicle (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS st_example_logo (
+  example_id INTEGER PRIMARY KEY,
+  logo_x REAL,
+  logo_y REAL,
+  logo_width REAL,
+  logo_height REAL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_st_example_vehicle_type
 ON st_example_vehicle(vehicle_type);
 
