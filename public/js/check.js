@@ -2361,6 +2361,8 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     rearWidthDifference:Number.isFinite(rearGeometry?.widthDifferencePct)?r1(rearGeometry.widthDifferencePct):null,
     rearHeightDifference:Number.isFinite(rearGeometry?.heightDifferencePct)?r1(rearGeometry.heightDifferencePct):null,
     rearOffsetDifference:Number.isFinite(rearGeometry?.offsetDifference)?r1(rearGeometry.offsetDifference):null,
+    rearHorizontalDifference:Number.isFinite(rearGeometry?.horizontalDifference)?r1(rearGeometry.horizontalDifference):null,
+    rearVerticalDifference:Number.isFinite(rearGeometry?.verticalDifference)?r1(rearGeometry.verticalDifference):null,
     rearSideMismatch:rearGeometry?.sideMismatch===true,
     rearUserSide:rearGeometry?.userSide||null,
     rearNormalSide:rearGeometry?.normalSide||null,
@@ -2384,40 +2386,55 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
   let recommendation="";
   const findings=[];
 
+  const isRear=snapshot.sticker.side_hint==="rear";
+
   if(confidence<58||calibration.stableIndices.length<12){
-    status="판정불가";
-    findings.push(
-      "스티커 구조 검출신뢰도가 낮아 자동판정을 확정하지 않았습니다. 관리자가 원본 사진과 선택영역을 직접 확인해 주세요."
-    );
-  }else{
-    if(Number(rules.use_damage)===1){
-      if(metrics.damage>=Number(rules.damage_replace_min)){
-        status="확인필요";
-        recommendation="교체 권고";
-        findings.push(`보정 구조손상 ${metrics.damage}% → 교체 권고`);
-      }else if(metrics.damage>Number(rules.damage_normal_max)){
-        status="확인필요";
-        findings.push(`보정 구조손상 ${metrics.damage}% → 손상 여부 확인필요`);
-      }
+    if(!isRear){
+      status="판정불가";
+      findings.push(
+        "스티커 구조 검출신뢰도가 낮아 자동판정을 확정하지 않았습니다. 관리자가 원본 사진과 선택영역을 직접 확인해 주세요."
+      );
     }
+  }
 
-    const isRear=snapshot.sticker.side_hint==="rear";
+  if(isRear){
+    // 후면은 손상률/HOG 구조보존을 판정조건에서 제외한다.
+    // 정상 샘플에서 야간조명·후미등 반사·촬영각도만으로 오탐이 발생했기 때문이다.
+    // 후면 주판정: 존재여부(상위 단계) + 좌우 + 번호판 대비 규격 + 상대위치.
+    if(!Number.isFinite(metrics.rearGeometrySimilarity)){
+      status="판정불가";
+      findings.push(
+        "후면 정상 예시의 번호판 기준영역이 없어 크기·부착위치 판정을 수행하지 못했습니다."
+      );
+    }else{
+      if(Number(rules.use_rear_geometry ?? 1)===1){
+        if(metrics.rearSideMismatch===true){
+          status="확인필요";
+          findings.push(
+            `후면 좌우 부착위치 불일치 → 정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)}`
+          );
+        }
 
-    if(isRear){
-      if(Number(rules.use_rear_geometry ?? 1)===1 &&
-         metrics.rearSideMismatch===true){
-        status="확인필요";
-        findings.push(
-          `후면 좌우 부착위치 불일치 → 정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)}`
-        );
-      }
-
-      if(Number(rules.use_rear_geometry ?? 1)===1 &&
-         Number.isFinite(metrics.rearGeometrySimilarity)){
         if(metrics.rearSizeDifference>Number(rules.rear_size_difference_max ?? 18)){
           status="확인필요";
           findings.push(
-            `후면 스티커 크기차이 ${metrics.rearSizeDifference}% → 번호판 대비 정상 예시 크기와 차이가 큼`
+            `후면 스티커 규격 차이 ${metrics.rearSizeDifference}% → 정상 예시 대비 크기가 달라 임의제작·규격상이 여부 확인필요`
+          );
+        }
+
+        if(Number.isFinite(metrics.rearHorizontalDifference) &&
+           metrics.rearHorizontalDifference>42){
+          status="확인필요";
+          findings.push(
+            `후면 수평 위치차이 ${metrics.rearHorizontalDifference}% → 번호판 대비 좌우 위치 확인필요`
+          );
+        }
+
+        if(Number.isFinite(metrics.rearVerticalDifference) &&
+           metrics.rearVerticalDifference>65){
+          status="확인필요";
+          findings.push(
+            `후면 수직 위치차이 ${metrics.rearVerticalDifference}% → 번호판 대비 상하 위치 확인필요`
           );
         }
 
@@ -2429,31 +2446,51 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
         }
       }
 
-      const rearDesignFloor=Math.min(metrics.designThreshold,55);
+      // 정상 샘플은 야간/각도 차이로 디자인 점수가 60%대까지 내려갈 수 있어
+      // 후면에서는 매우 큰 형상 불일치만 보조적으로 임의제작 의심 처리한다.
+      const rearDesignFloor=50;
       if(Number(rules.use_design ?? 1)===1 &&
          metrics.designSimilarity<rearDesignFloor){
         status="확인필요";
         findings.push(
-          `후면 디자인 동일성 ${metrics.designSimilarity}% → 기준 원본과 형상이 크게 다를 가능성`
+          `후면 디자인 동일성 ${metrics.designSimilarity}% → 정상 원본과 형상이 크게 달라 임의제작 여부 확인필요`
         );
       }
-    }else{
-      if(Number(rules.use_design ?? 1)===1 &&
-         metrics.designSimilarity<metrics.designThreshold){
-        status="확인필요";
-        findings.push(
-          `디자인 동일성 ${metrics.designSimilarity}% < 차종별 기준 ${metrics.designThreshold}% → 기준 스티커와 폰트·로고·자간·그래픽 형상이 다를 가능성`
-        );
-      }
+    }
 
-      if(Number(rules.use_placement ?? 1)===1 &&
-         Number.isFinite(metrics.placementSimilarity) &&
-         metrics.placementSimilarity<Number(rules.placement_similarity_min ?? 55)){
+    if(status==="정상"&&!findings.length){
+      findings.push(
+        `${vehicleLabel(snapshot.vehicleType)} 후면 정상 예시 대비 스티커 존재·좌우·규격·상대위치가 정상 범위입니다.`
+      );
+    }
+  }else if(status!=="판정불가"){
+    // 측면은 기존 판정 로직 유지
+    if(Number(rules.use_damage)===1){
+      if(metrics.damage>=Number(rules.damage_replace_min)){
         status="확인필요";
-        findings.push(
-          `부착위치 유사도 ${metrics.placementSimilarity}% → ${vehicleLabel(snapshot.vehicleType)} 정상 예시 대비 위치·방향 확인필요`
-        );
+        recommendation="교체 권고";
+        findings.push(`보정 구조손상 ${metrics.damage}% → 교체 권고`);
+      }else if(metrics.damage>Number(rules.damage_normal_max)){
+        status="확인필요";
+        findings.push(`보정 구조손상 ${metrics.damage}% → 손상 여부 확인필요`);
       }
+    }
+
+    if(Number(rules.use_design ?? 1)===1 &&
+       metrics.designSimilarity<metrics.designThreshold){
+      status="확인필요";
+      findings.push(
+        `디자인 동일성 ${metrics.designSimilarity}% < 차종별 기준 ${metrics.designThreshold}% → 기준 스티커와 폰트·로고·자간·그래픽 형상이 다를 가능성`
+      );
+    }
+
+    if(Number(rules.use_placement ?? 1)===1 &&
+       Number.isFinite(metrics.placementSimilarity) &&
+       metrics.placementSimilarity<Number(rules.placement_similarity_min ?? 55)){
+      status="확인필요";
+      findings.push(
+        `부착위치 유사도 ${metrics.placementSimilarity}% → ${vehicleLabel(snapshot.vehicleType)} 정상 예시 대비 위치·방향 확인필요`
+      );
     }
 
     if(Number(rules.use_shape)===1&&metrics.shape<Number(rules.shape_similarity_min)){
@@ -2468,24 +2505,35 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     }
   }
 
-  const placementForScore=snapshot.sticker.side_hint==="rear"
-    ? (Number.isFinite(metrics.rearGeometrySimilarity) ? metrics.rearGeometrySimilarity : 100)
+  const placementForScore=isRear
+    ? (Number.isFinite(metrics.rearGeometrySimilarity) ? metrics.rearGeometrySimilarity : 0)
     : (Number.isFinite(metrics.placementSimilarity) ? metrics.placementSimilarity : 100);
 
-  const designForScore=snapshot.sticker.side_hint==="rear"
+  const designForScore=isRear
     ? Math.max(metrics.designSimilarity,70)
     : metrics.designSimilarity;
 
-  const score=status==="판정불가"
-    ? r1(confidence*.5)
-    : r1(clamp(
-        (100-metrics.damage)*.38+
-        designForScore*.30+
-        metrics.shape*.18+
-        placementForScore*.08+
-        confidence*.06,
+  const rearComplianceScore=isRear
+    ? clamp(
+        placementForScore*.62+
+        designForScore*.18+
+        Math.max(confidence,65)*.20,
         0,100
-      ));
+      )
+    : null;
+
+  const score=status==="판정불가"
+    ? r1(isRear ? rearComplianceScore*.5 : confidence*.5)
+    : r1(isRear
+        ? rearComplianceScore
+        : clamp(
+            (100-metrics.damage)*.38+
+            designForScore*.30+
+            metrics.shape*.18+
+            placementForScore*.08+
+            confidence*.06,
+            0,100
+          ));
 
   return{
     crop:best.box,
@@ -2871,16 +2919,19 @@ function rearGeometryComparison(snapshot,normalRecords){
       user.heightRatio/Math.max(.0001,normal.heightRatio)
     );
 
+    // 비스듬한 후면사진에서는 높이보다 번호판 대비 폭 비율이 더 안정적이다.
     const sizeDifferencePct=
-      widthDifferencePct*.72+
-      heightDifferencePct*.28;
+      widthDifferencePct*.85+
+      heightDifferencePct*.15;
 
     const dxDiff=Math.abs(user.offsetX-normal.offsetX);
     const dyDiff=Math.abs(user.offsetY-normal.offsetY);
+    const horizontalDifference=dxDiff*100;
+    const verticalDifference=dyDiff*100;
 
     const offsetDifference=Math.sqrt(
-      (dxDiff/.28)**2*.56+
-      (dyDiff/.38)**2*.44
+      (dxDiff/.34)**2*.62+
+      (dyDiff/.52)**2*.38
     );
 
     const sideMismatch=rearSideMismatch(user,normal);
@@ -2908,6 +2959,8 @@ function rearGeometryComparison(snapshot,normalRecords){
       widthDifferencePct,
       heightDifferencePct,
       offsetDifference,
+      horizontalDifference,
+      verticalDifference,
       sideMismatch,
       userSide:user.side,
       normalSide:normal.side,
