@@ -330,12 +330,14 @@ async function getConfig(env) {
 
   for (const r of rows.results || []) {
     const examples = await env.DB.prepare(`
-      SELECT e.id,e.sort_order,e.crop_x,e.crop_y,e.crop_width,e.crop_height,
-             e.is_guide,e.created_at,e.updated_at,
-             g.plate_x,g.plate_y,g.plate_width,g.plate_height
-      FROM st_examples e
-      LEFT JOIN st_example_geometry g ON g.example_id=e.id
-      WHERE e.sticker_id=?
+SELECT e.id,e.sort_order,e.crop_x,e.crop_y,e.crop_width,e.crop_height,
+       e.is_guide,e.created_at,e.updated_at,
+       g.plate_x,g.plate_y,g.plate_width,g.plate_height,
+       v.vehicle_type
+FROM st_examples e
+LEFT JOIN st_example_geometry g ON g.example_id=e.id
+LEFT JOIN st_example_vehicle v ON v.example_id=e.id
+WHERE e.sticker_id=?
       ORDER BY e.is_guide DESC,e.sort_order ASC,e.id ASC
     `).bind(r.id).all();
 
