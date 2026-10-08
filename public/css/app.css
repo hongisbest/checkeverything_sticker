@@ -727,3 +727,93 @@ body.modal-open{overflow:hidden}
   font-size:9px;
   font-weight:800;
 }
+/* ===== V18 vehicle-specific reference selection ===== */
+.vehicle-select-block,
+.sticker-select-block{
+  margin-top:12px;
+}
+.vehicle-select-block h3,
+.sticker-select-block h3{
+  margin:4px 0 8px;
+  font-size:14px;
+}
+.vehicle-tabs{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+}
+.vehicle-tab{
+  appearance:none;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#fff;
+  padding:12px 10px;
+  font-weight:800;
+  cursor:pointer;
+}
+.vehicle-tab.active{
+  border-color:#0f2742;
+  background:#edf4fb;
+  color:#0f2742;
+}
+.example-vehicle-select{
+  width:100%;
+  min-height:34px;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:#fff;
+  padding:0 8px;
+}
+.color-disabled-card{
+  opacity:.78;
+}
+@media(max-width:600px){
+  .vehicle-tab{
+    padding:10px 6px;
+    font-size:12px;
+  }
+}
+
+
+/* ===== V19 rear geometry ===== */
+.rear-rule-card{border-color:#cdd8e5;}
+/* ===== V20 vehicle number match ===== */
+.plate-match-panel{
+  margin-top:10px;
+  padding:12px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#fff;
+}
+.plate-match-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:5px 0;
+  font-size:12px;
+}
+.plate-match-row span{
+  color:var(--muted);
+}
+.plate-match-row strong{
+  font-size:15px;
+  letter-spacing:.4px;
+}
+.plate-match-confirm{
+  display:flex;
+  gap:8px;
+  align-items:flex-start;
+  margin-top:10px;
+  padding:10px;
+  border:1px solid #cbd5e1;
+  border-radius:9px;
+  background:#f8fafc;
+  font-size:12px;
+  line-height:1.45;
+  cursor:pointer;
+}
+.plate-match-confirm input{
+  margin-top:2px;
+  flex:0 0 auto;
+}
