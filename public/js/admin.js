@@ -966,7 +966,9 @@ async function loadInspections(){
                     ? "자동분석 대기 중 · 사진과 선택영역은 저장 완료"
                     : `보정 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 동일성 ${Number(metrics.designSimilarity??0).toFixed(1)}% (기준 ${Number(metrics.designThreshold??0).toFixed(1)}%) · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`}</span>
                   <span>${metrics.sideHint==="rear" && Number.isFinite(Number(metrics.rearGeometrySimilarity))
-                    ? `후면 기준 유사도 ${Number(metrics.rearGeometrySimilarity).toFixed(1)}% · 크기차이 ${Number(metrics.rearSizeDifference).toFixed(1)}%`
+                    ? `후면 기준 유사도 ${Number(metrics.rearGeometrySimilarity).toFixed(1)}% · 크기차이 ${Number(metrics.rearSizeDifference).toFixed(1)}% · 좌우 ${metrics.rearSideMismatch===true
+                        ? `불일치(정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)})`
+                        : "일치"}`
                     : (Number.isFinite(Number(metrics.placementSimilarity))
                         ? `부착위치 유사도 ${Number(metrics.placementSimilarity).toFixed(1)}%`
                         : "부착위치 기준 미설정")}</span>
@@ -1227,6 +1229,14 @@ function fetchTimeout(url,opts={},ms=20000){
       throw e;
     })
     .finally(()=>clearTimeout(timer));
+}
+
+function rearSideLabel(side){
+  return({
+    left:"왼쪽",
+    right:"오른쪽",
+    center:"중앙"
+  })[side]||"미확인";
 }
 
 function vehicleLabel(v){
