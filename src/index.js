@@ -135,6 +135,14 @@ function ensureSchema(env) {
         vehicle_type TEXT NOT NULL,
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_example_logo (
+        example_id INTEGER PRIMARY KEY,
+        logo_x REAL,
+        logo_y REAL,
+        logo_width REAL,
+        logo_height REAL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`),
       env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_example_vehicle_type ON st_example_vehicle(vehicle_type)"),
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_rear_rules (
         id INTEGER PRIMARY KEY CHECK (id=1),
@@ -340,9 +348,11 @@ async function getConfig(env) {
       SELECT e.id,e.sort_order,e.crop_x,e.crop_y,e.crop_width,e.crop_height,
              e.is_guide,e.created_at,e.updated_at,
              g.plate_x,g.plate_y,g.plate_width,g.plate_height,
+             l.logo_x,l.logo_y,l.logo_width,l.logo_height,
              v.vehicle_type
       FROM st_examples e
       LEFT JOIN st_example_geometry g ON g.example_id=e.id
+      LEFT JOIN st_example_logo l ON l.example_id=e.id
       LEFT JOIN st_example_vehicle v ON v.example_id=e.id
       WHERE e.sticker_id=?
       ORDER BY e.sort_order ASC,e.id ASC
@@ -356,7 +366,10 @@ async function getConfig(env) {
         x.crop_width!==null && x.crop_height!==null,
       plate_calibrated:
         x.plate_x!==null && x.plate_y!==null &&
-        x.plate_width!==null && x.plate_height!==null
+        x.plate_width!==null && x.plate_height!==null,
+      logo_calibrated:
+        x.logo_x!==null && x.logo_y!==null &&
+        x.logo_width!==null && x.logo_height!==null
     }));
 
     stickers.push({
@@ -544,6 +557,19 @@ async function updateSticker(request, env, id) {
         WHERE ne.sticker_id=?
       `).bind(id,inserted.id).run();
 
+      await env.DB.prepare(`
+        INSERT OR REPLACE INTO st_example_logo(
+          example_id,logo_x,logo_y,logo_width,logo_height,updated_at
+        )
+        SELECT ne.id,l.logo_x,l.logo_y,l.logo_width,l.logo_height,datetime('now')
+        FROM st_examples ne
+        JOIN st_examples oe
+          ON oe.sticker_id=? AND oe.sort_order=ne.sort_order
+        JOIN st_example_logo l
+          ON l.example_id=oe.id
+        WHERE ne.sticker_id=?
+      `).bind(id,inserted.id).run();
+
       return j({
         ok:true,
         id:inserted?.id,
@@ -634,6 +660,7 @@ async function deleteSticker(env, id) {
   for (const ex of examples.results || []) {
     await env.DB.prepare("DELETE FROM st_example_vehicle WHERE example_id=?").bind(ex.id).run();
     await env.DB.prepare("DELETE FROM st_example_geometry WHERE example_id=?").bind(ex.id).run();
+    await env.DB.prepare("DELETE FROM st_example_logo WHERE example_id=?").bind(ex.id).run();
     await env.DB.prepare("DELETE FROM st_examples WHERE id=?").bind(ex.id).run();
 
     const refs = await env.DB.prepare(
@@ -663,9 +690,11 @@ async function listExamples(env, stickerId) {
     SELECT e.id,e.sort_order,e.crop_x,e.crop_y,e.crop_width,e.crop_height,
            e.is_guide,e.created_at,e.updated_at,
            g.plate_x,g.plate_y,g.plate_width,g.plate_height,
+           l.logo_x,l.logo_y,l.logo_width,l.logo_height,
            v.vehicle_type
     FROM st_examples e
     LEFT JOIN st_example_geometry g ON g.example_id=e.id
+    LEFT JOIN st_example_logo l ON l.example_id=e.id
     LEFT JOIN st_example_vehicle v ON v.example_id=e.id
     WHERE e.sticker_id=?
     ORDER BY e.sort_order ASC,e.id ASC
@@ -682,7 +711,10 @@ async function listExamples(env, stickerId) {
         x.crop_width!==null && x.crop_height!==null,
       plate_calibrated:
         x.plate_x!==null && x.plate_y!==null &&
-        x.plate_width!==null && x.plate_height!==null
+        x.plate_width!==null && x.plate_height!==null,
+      logo_calibrated:
+        x.logo_x!==null && x.logo_y!==null &&
+        x.logo_width!==null && x.logo_height!==null
     }))
   });
 }
@@ -807,12 +839,13 @@ async function updateExampleVehicle(request, env, exampleId) {
 
 async function updateExampleRoi(request, env, exampleId) {
   const body=await request.json().catch(()=>({}));
-  const kind=body.kind==="plate" ? "plate" : "sticker";
+  const kind=body.kind==="plate" ? "plate" : (body.kind==="logo" ? "logo" : "sticker");
   const x=Number(body.x),y=Number(body.y),w=Number(body.width),h=Number(body.height);
+  const kindLabel=kind==="plate" ? "번호판" : (kind==="logo" ? "차량로고" : "스티커");
 
   if (![x,y,w,h].every(Number.isFinite) || x<0 || y<0 || w<.01 || h<.01 ||
       x+w>1.0001 || y+h>1.0001) {
-    return j({ok:false,error:`${kind==="plate"?"번호판":"스티커"} 영역 좌표가 올바르지 않습니다.`},400);
+    return j({ok:false,error:`${kindLabel} 영역 좌표가 올바르지 않습니다.`},400);
   }
 
   const ex=await env.DB.prepare("SELECT id,sticker_id FROM st_examples WHERE id=?")
@@ -830,6 +863,18 @@ async function updateExampleRoi(request, env, exampleId) {
         plate_y=excluded.plate_y,
         plate_width=excluded.plate_width,
         plate_height=excluded.plate_height,
+        updated_at=datetime('now')
+    `).bind(exampleId,x,y,w,h).run();
+  }else if(kind==="logo"){
+    await env.DB.prepare(`
+      INSERT INTO st_example_logo(
+        example_id,logo_x,logo_y,logo_width,logo_height,updated_at
+      ) VALUES(?,?,?,?,?,datetime('now'))
+      ON CONFLICT(example_id) DO UPDATE SET
+        logo_x=excluded.logo_x,
+        logo_y=excluded.logo_y,
+        logo_width=excluded.logo_width,
+        logo_height=excluded.logo_height,
         updated_at=datetime('now')
     `).bind(exampleId,x,y,w,h).run();
   }else{
@@ -876,6 +921,7 @@ async function deleteExample(env, exampleId) {
 
   await env.DB.prepare("DELETE FROM st_example_vehicle WHERE example_id=?").bind(exampleId).run();
   await env.DB.prepare("DELETE FROM st_example_geometry WHERE example_id=?").bind(exampleId).run();
+  await env.DB.prepare("DELETE FROM st_example_logo WHERE example_id=?").bind(exampleId).run();
   await env.DB.prepare("DELETE FROM st_examples WHERE id=?").bind(exampleId).run();
 
   if (Number(ex.is_guide)===1) {
