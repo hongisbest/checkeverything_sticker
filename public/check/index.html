@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
 <title>법인차량 홍보스티커 셀프점검</title>
-<link rel="stylesheet" href="/css/app.css?v=17.0.0">
+<link rel="stylesheet" href="/css/app.css?v=20.0.0">
 </head>
 <body>
 <main class="container">
@@ -14,7 +14,7 @@
   <div>
     <p class="eyebrow">VEHICLE STICKER SELF INSPECTION</p>
     <h1>법인차량 홍보스티커 셀프점검</h1>
-    <p class="sub">차종·차량색상과 분리하여 스티커 원본 구조를 기준으로 점검합니다. 정상부착 예시사진은 촬영가이드와 정상상태 보정에 사용됩니다.</p>
+    <p class="sub">K3·아반떼·EV3 중 차종을 선택하면 해당 차종의 정상 예시사진만 기준으로 비교합니다. 차량은 흰색 기준이며 색상차이는 자동판정에서 제외합니다.</p>
   </div>
   <span class="badge">VEHICLE STICKER</span>
 </section>
@@ -37,14 +37,28 @@
     <span id="configStatus" class="badge">불러오는 중</span>
   </div>
 
-  <div id="stickerTabs" class="sticker-tabs"></div>
+  <div class="vehicle-select-block">
+    <span class="step">VEHICLE TYPE</span>
+    <h3>차량 종류를 선택해 주세요</h3>
+    <div id="vehicleTabs" class="vehicle-tabs">
+      <button class="vehicle-tab" type="button" data-vehicle="k3">K3</button>
+      <button class="vehicle-tab" type="button" data-vehicle="avante">아반떼</button>
+      <button class="vehicle-tab" type="button" data-vehicle="ev3">EV3</button>
+    </div>
+  </div>
+
+  <div class="sticker-select-block">
+    <span class="step">STICKER POSITION</span>
+    <h3>점검할 스티커를 선택해 주세요</h3>
+    <div id="stickerTabs" class="sticker-tabs"></div>
+  </div>
 
   <div class="reference-layout">
     <div id="referenceBox" class="reference-box guide-example-box">
       <div class="empty">정상부착 예시사진 1번을 불러오는 중입니다.</div>
     </div>
     <div>
-      <span class="step">NORMAL ATTACHMENT GUIDE #1</span>
+      <span class="step">VEHICLE-SPECIFIC NORMAL GUIDE</span>
       <h3 id="stickerTitle">촬영가이드</h3>
       <div id="sideHintText" class="message info">부착 위치</div>
       <div id="guideText" class="message info">촬영가이드</div>
@@ -163,6 +177,24 @@
       </div>
       <div id="reviewPlateCrop" class="capture-review-image"></div>
       <div id="reviewPlateQuality" class="message info">번호판 촬영영역을 확인해 주세요.</div>
+
+      <div class="plate-match-panel">
+        <div class="plate-match-row">
+          <span>입력한 차량번호</span>
+          <strong id="enteredVehicleNoPreview">-</strong>
+        </div>
+        <div class="plate-match-row">
+          <span>자동판독</span>
+          <strong id="plateOcrPreview">판독 전</strong>
+        </div>
+        <div id="plateOcrMessage" class="message info">
+          자동판독이 지원되지 않거나 결과가 애매하면 확대된 번호판을 직접 확인해 주세요.
+        </div>
+        <label class="plate-match-confirm">
+          <input id="plateMatchConfirm" type="checkbox">
+          <span>촬영된 번호판과 입력한 차량번호가 일치함을 확인했습니다.</span>
+        </label>
+      </div>
     </div>
   </div>
 
@@ -203,6 +235,6 @@
 </section>
 
 </main>
-<script src="/js/check.js?v=17.0.0"></script>
+<script src="/js/check.js?v=20.0.0"></script>
 </body>
 </html>
