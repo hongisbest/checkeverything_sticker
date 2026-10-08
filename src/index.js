@@ -198,10 +198,21 @@ async function api(request, env, url) {
   if (stickerExamples && request.method === "GET") return listExamples(env, Number(stickerExamples[1]));
   if (stickerExamples && request.method === "POST") return addExamples(request, env, Number(stickerExamples[1]));
 
-  const exampleRoi = p.match(/^\/api\/admin\/examples\/(\d+)\/roi$/);
-  if (exampleRoi && request.method === "PATCH") return updateExampleRoi(request, env, Number(exampleRoi[1]));
+const exampleRoi = p.match(/^\/api\/admin\/examples\/(\d+)\/roi$/);
+if (exampleRoi && request.method === "PATCH") {
+  return updateExampleRoi(request, env, Number(exampleRoi[1]));
+}
 
-  const exampleGuide = p.match(/^\/api\/admin\/examples\/(\d+)\/guide$/);
+const exampleVehicle = p.match(/^\/api\/admin\/examples\/(\d+)\/vehicle$/);
+if (exampleVehicle && request.method === "PATCH") {
+  return updateExampleVehicle(
+    request,
+    env,
+    Number(exampleVehicle[1])
+  );
+}
+
+const exampleGuide = p.match(/^\/api\/admin\/examples\/(\d+)\/guide$/);
   if (exampleGuide && request.method === "POST") return setGuideExample(env, Number(exampleGuide[1]));
 
   const exampleDelete = p.match(/^\/api\/admin\/examples\/(\d+)$/);
