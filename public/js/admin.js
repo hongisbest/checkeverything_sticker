@@ -10,14 +10,45 @@ const S={
   roiMode:"sticker",
   roiSticker:null,
   roiPlate:null,
+  roiLogo:null,
   inspectionItems:[],
   selectedInspectionIds:new Set()
 };
 
 document.addEventListener("DOMContentLoaded",()=>{
+  enableSimpleInspectionAdminUi();
   bind();
   checkSession();
 });
+
+function enableSimpleInspectionAdminUi(){
+  const bar=document.querySelector(".roi-mode-bar");
+  const stage=$("exampleRoiStage");
+
+  if(bar && !$("exampleLogoModeBtn")){
+    const btn=document.createElement("button");
+    btn.id="exampleLogoModeBtn";
+    btn.className="btn";
+    btn.type="button";
+    btn.textContent="③ 후면 차량로고";
+    bar.appendChild(btn);
+  }
+
+  if(stage && !$("exampleLogoRoiBox")){
+    const box=document.createElement("div");
+    box.id="exampleLogoRoiBox";
+    box.className="selection-box plate-calibration-box hidden";
+    stage.insertBefore(box,$("exampleRoiDraftBox"));
+  }
+
+  const help=document.querySelector("#exampleRoiModal .help");
+  if(help){
+    help.textContent=
+      "스티커 영역은 실제 스티커보다 사방 10~20% 정도 여유 있게 잡아 주세요. "+
+      "후면 예시는 차량 제조사 로고(KIA/현대 등)도 별도로 지정해 주세요. "+
+      "번호판은 차량번호 확인용이며 스티커 판정기준에는 사용하지 않습니다.";
+  }
+}
 
 function bind(){
   $("loginBtn").onclick=login;
@@ -36,6 +67,7 @@ function bind(){
   $("closeExampleRoiBtn").onclick=closeExampleRoi;
   $("exampleStickerModeBtn").onclick=()=>setExampleRoiMode("sticker");
   $("examplePlateModeBtn").onclick=()=>setExampleRoiMode("plate");
+  if($("exampleLogoModeBtn"))$("exampleLogoModeBtn").onclick=()=>setExampleRoiMode("logo");
   $("resetExampleRoiBtn").onclick=resetExampleRoi;
   $("saveExampleRoiBtn").onclick=saveExampleRoi;
   $("exampleRoiStage").addEventListener("pointerdown",startExampleRoi);
@@ -299,7 +331,8 @@ async function loadExamples(){
             <div style="margin-top:5px">
               ${x.vehicle_type?`<span class="pill active">${vehicleLabel(x.vehicle_type)}</span>`:'<span class="pill review">차종 미지정</span>'}
               ${x.calibrated?'<span class="pill normal">스티커영역 완료</span>':'<span class="pill review">스티커영역 필요</span>'}
-              ${x.plate_calibrated?'<span class="pill normal">위치기준 완료</span>':'<span class="pill">번호판 미설정</span>'}
+              ${x.plate_calibrated?'<span class="pill normal">번호판 완료</span>':'<span class="pill">번호판 미설정</span>'}
+              ${x.logo_calibrated?'<span class="pill normal">후면로고 완료</span>':'<span class="pill">후면로고 미설정</span>'}
             </div>
             <select class="example-vehicle-select" onchange="setExampleVehicle(${x.id},this.value)" style="margin-top:8px">
               <option value="" ${!x.vehicle_type?"selected":""}>차종 선택</option>
@@ -423,6 +456,9 @@ window.openExampleRoi=function(id){
   S.roiPlate=ex.plate_calibrated
     ? {x:Number(ex.plate_x),y:Number(ex.plate_y),width:Number(ex.plate_width),height:Number(ex.plate_height)}
     : null;
+  S.roiLogo=ex.logo_calibrated
+    ? {x:Number(ex.logo_x),y:Number(ex.logo_y),width:Number(ex.logo_width),height:Number(ex.logo_height)}
+    : null;
   S.roiDraft=null;
 
   $("exampleRoiImage").src=`${ex.image_url}?v=${Date.now()}`;
@@ -445,26 +481,37 @@ function closeExampleRoi(){
 }
 
 function setExampleRoiMode(mode){
-  S.roiMode=mode==="plate" ? "plate" : "sticker";
+  S.roiMode=["sticker","plate","logo"].includes(mode) ? mode : "sticker";
   S.roiDraft=null;
   $("exampleRoiDraftBox").classList.add("hidden");
 
   $("exampleStickerModeBtn").classList.toggle("primary",S.roiMode==="sticker");
   $("examplePlateModeBtn").classList.toggle("primary",S.roiMode==="plate");
+  if($("exampleLogoModeBtn")){
+    $("exampleLogoModeBtn").classList.toggle("primary",S.roiMode==="logo");
+  }
 
-  const current=S.roiMode==="plate" ? S.roiPlate : S.roiSticker;
+  const current=S.roiMode==="plate"
+    ? S.roiPlate
+    : (S.roiMode==="logo" ? S.roiLogo : S.roiSticker);
+
+  const label=S.roiMode==="plate"
+    ? "번호판"
+    : (S.roiMode==="logo" ? "차량로고" : "스티커");
+
   $("saveExampleRoiBtn").disabled=!current;
-  $("saveExampleRoiBtn").textContent=S.roiMode==="plate"
-    ? "번호판 영역 저장"
-    : "스티커 영역 저장";
+  $("saveExampleRoiBtn").textContent=`${label} 영역 저장`;
 
-  msg(
-    "exampleRoiMessage",
-    S.roiMode==="plate"
-      ? "번호판 전체를 타이트하게 지정해 주세요. 위치 판정을 사용하지 않으면 생략해도 됩니다."
-      : "차량이나 문손잡이를 제외하고 실제 스티커 전체만 타이트하게 지정해 주세요.",
-    "info"
-  );
+  let text="";
+  if(S.roiMode==="sticker"){
+    text="실제 스티커 외곽보다 사방 10~20% 정도 여유 있게 지정해 주세요.";
+  }else if(S.roiMode==="logo"){
+    text="후면 차량의 제조사 로고(KIA/현대 등) 전체를 타이트하게 지정해 주세요.";
+  }else{
+    text="차량번호 확인용으로 번호판 전체를 타이트하게 지정해 주세요. 스티커 판정에는 사용하지 않습니다.";
+  }
+
+  msg("exampleRoiMessage",text,"info");
 }
 
 function roiPoint(e){
@@ -515,6 +562,8 @@ function endExampleRoi(){
 
   if(S.roiMode==="plate"){
     S.roiPlate={...S.roiDraft};
+  }else if(S.roiMode==="logo"){
+    S.roiLogo={...S.roiDraft};
   }else{
     S.roiSticker={...S.roiDraft};
   }
@@ -533,6 +582,7 @@ function renderExampleDraft(){
 function renderStoredExampleRois(){
   const stickerBox=$("exampleStickerRoiBox");
   const plateBox=$("examplePlateRoiBox");
+  const logoBox=$("exampleLogoRoiBox");
 
   if(S.roiSticker){
     renderExampleBox(stickerBox,S.roiSticker);
@@ -546,6 +596,15 @@ function renderStoredExampleRois(){
     plateBox.classList.remove("hidden");
   }else{
     plateBox.classList.add("hidden");
+  }
+
+  if(logoBox){
+    if(S.roiLogo){
+      renderExampleBox(logoBox,S.roiLogo);
+      logoBox.classList.remove("hidden");
+    }else{
+      logoBox.classList.add("hidden");
+    }
   }
 }
 
@@ -562,6 +621,9 @@ function resetExampleRoi(){
   if(S.roiMode==="plate"){
     S.roiPlate=null;
     $("examplePlateRoiBox").classList.add("hidden");
+  }else if(S.roiMode==="logo"){
+    S.roiLogo=null;
+    if($("exampleLogoRoiBox"))$("exampleLogoRoiBox").classList.add("hidden");
   }else{
     S.roiSticker=null;
     $("exampleStickerRoiBox").classList.add("hidden");
@@ -573,28 +635,22 @@ function resetExampleRoi(){
   $("exampleRoiDraftBox").classList.add("hidden");
   $("saveExampleRoiBtn").disabled=true;
 
-  msg(
-    "exampleRoiMessage",
-    S.roiMode==="plate"
-      ? "번호판 전체를 다시 드래그해 주세요."
-      : "스티커 전체를 다시 드래그해 주세요.",
-    "info"
-  );
+  const label=S.roiMode==="plate"?"번호판":(S.roiMode==="logo"?"차량로고":"스티커");
+  msg("exampleRoiMessage",`${label} 영역을 다시 드래그해 주세요.`,"info");
 }
 
 async function saveExampleRoi(){
   if(!S.roiExampleId)return;
 
-  const region=S.roiMode==="plate" ? S.roiPlate : S.roiSticker;
+  const region=S.roiMode==="plate"
+    ? S.roiPlate
+    : (S.roiMode==="logo" ? S.roiLogo : S.roiSticker);
   if(!region)return;
 
-  $("saveExampleRoiBtn").disabled=true;
+  const label=S.roiMode==="plate"?"번호판":(S.roiMode==="logo"?"차량로고":"스티커");
 
-  msg(
-    "exampleRoiMessage",
-    `${S.roiMode==="plate"?"번호판":"스티커"} 영역을 저장 중입니다...`,
-    "info"
-  );
+  $("saveExampleRoiBtn").disabled=true;
+  msg("exampleRoiMessage",`${label} 영역을 저장 중입니다...`,"info");
 
   try{
     const r=await fetchTimeout(`/api/admin/examples/${S.roiExampleId}/roi`,{
@@ -609,74 +665,15 @@ async function saveExampleRoi(){
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"영역 저장 실패");
 
-    msg(
-      "exampleRoiMessage",
-      `${S.roiMode==="plate"?"번호판":"스티커"} 영역 저장 완료`,
-      "success"
-    );
-
+    msg("exampleRoiMessage",`${label} 영역 저장 완료`,"success");
     await loadExamples();
     await loadStickers();
-
-    if(S.roiMode==="sticker"&&!S.roiPlate){
-      setExampleRoiMode("plate");
-    }else{
-      setTimeout(closeExampleRoi,500);
-    }
   }catch(e){
     msg("exampleRoiMessage",e.message,"error");
+  }finally{
     $("saveExampleRoiBtn").disabled=false;
   }
 }
-
-window.activateSticker=async id=>{
-  try{
-    const r=await fetchTimeout(`/api/admin/stickers/${id}/activate`,{method:"POST"},12000);
-    const d=await r.json();
-
-    if(!r.ok)throw new Error(d.error||"활성화 실패");
-
-    loadStickers();
-  }catch(e){
-    alert(e.message);
-  }
-};
-
-window.deleteSticker=async id=>{
-  if(!confirm("이 스티커 기준을 삭제할까요? 점검결과와 연결된 버전은 삭제되지 않습니다."))return;
-
-  try{
-    const r=await fetchTimeout(`/api/admin/stickers/${id}`,{method:"DELETE"},15000);
-    const d=await r.json();
-
-    if(!r.ok)throw new Error(d.error||"삭제 실패");
-
-    loadStickers();
-  }catch(e){
-    alert(e.message);
-  }
-};
-
-window.openEdit=function(id){
-  const item=S.stickers.find(x=>Number(x.id)===Number(id));
-  if(!item)return;
-
-  $("editStickerId").value=item.id;
-  $("editStickerName").value=item.name||"";
-  $("editSideHint").value=item.side_hint||"both";
-  $("editGuideText").value=item.guide_text||"";
-  $("editStickerFile").value="";
-
-  $("editCurrentPreview").innerHTML=`<img src="/api/sticker/${item.id}/image?v=${Date.now()}" alt="현재 이미지">`;
-  $("editNewPreview").innerHTML="";
-  $("editNewPreview").classList.add("hidden");
-
-  msg("editMessage","이미지를 변경하지 않으면 이름·가이드만 수정됩니다.","info");
-
-  $("editModal").classList.remove("hidden");
-  document.body.classList.add("modal-open");
-};
-
 function closeEdit(){
   if(!$("editModal"))return;
   $("editModal").classList.add("hidden");
@@ -963,19 +960,21 @@ async function loadInspections(){
                   <span>차종 ${vehicleLabel(metrics.vehicleType||"")||"미기록"}</span>
                   <span>점수 ${Number(x.score).toFixed(1)} · <b>${esc(x.status)}</b></span>
                   <span>${x.status==="분석대기"
-                    ? "자동분석 대기 중 · 사진과 선택영역은 저장 완료"
-                    : (metrics.sideHint==="rear"
-                        ? `후면 참고값(판정 제외): 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 ${Number(metrics.designSimilarity??0).toFixed(1)}% · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`
-                        : `보정 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 동일성 ${Number(metrics.designSimilarity??0).toFixed(1)}% (기준 ${Number(metrics.designThreshold??0).toFixed(1)}%) · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`)}</span>
-                  <span>${metrics.sideHint==="rear" && Number.isFinite(Number(metrics.rearGeometrySimilarity))
-                    ? `후면 기준 유사도 ${Number(metrics.rearGeometrySimilarity).toFixed(1)}% · 규격차이 ${Number(metrics.rearSizeDifference).toFixed(1)}% · 수평차이 ${Number(metrics.rearHorizontalDifference??0).toFixed(1)}% · 수직차이 ${Number(metrics.rearVerticalDifference??0).toFixed(1)}% · 좌우 ${metrics.rearSideMismatch===true
-                        ? `불일치(정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)})`
-                        : "일치"}`
-                    : (metrics.placementSimilarity!==null &&
-                       metrics.placementSimilarity!==undefined &&
-                       Number.isFinite(Number(metrics.placementSimilarity))
-                        ? `부착위치 유사도 ${Number(metrics.placementSimilarity).toFixed(1)}%`
-                        : "부착위치 기준 미설정")}</span>
+                    ? "자동분석 대기 중 · 사진 저장 완료"
+                    : (metrics.simpleInspectionV25===true
+                        ? `스티커 ${metrics.stickerDetected===true?"검출":"미검출"} · 추정 훼손 ${Number(metrics.damage??0).toFixed(1)}%${metrics.sideHint==="rear"
+                            ? ` · 로고기준 ${metrics.rearLogoRight===true?"오른쪽":(metrics.rearLogoRight===false?"위치이상":"확인필요")} · 규격차이 ${Number(metrics.rearSizeDifference??0).toFixed(1)}%`
+                            : ""}`
+                        : `기존 분석 · 손상 ${Number(metrics.damage??0).toFixed(1)}% · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`)}</span>
+                  ${metrics.simpleInspectionV25===true
+                    ? ""
+                    : `<span>${metrics.sideHint==="rear" && Number.isFinite(Number(metrics.rearGeometrySimilarity))
+                        ? `후면 기준 유사도 ${Number(metrics.rearGeometrySimilarity).toFixed(1)}%`
+                        : (metrics.placementSimilarity!==null &&
+                           metrics.placementSimilarity!==undefined &&
+                           Number.isFinite(Number(metrics.placementSimilarity))
+                            ? `부착위치 유사도 ${Number(metrics.placementSimilarity).toFixed(1)}%`
+                            : "부착위치 기준 미설정")}</span>`}
                   ${metrics.stickerRoiMode==="auto-from-plate"
                     ? '<span>스티커 영역: 번호판 기준 자동탐색</span>'
                     : ""}
