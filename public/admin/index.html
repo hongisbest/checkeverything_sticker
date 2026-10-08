@@ -79,7 +79,7 @@
     <div class="form-group">
       <label>정상부착 예시사진 *</label>
       <input id="exampleFiles" type="file" accept="image/*" multiple>
-      <p class="help">첫 번째 사진은 직원 촬영가이드 1번으로 사용합니다. 여러 차종/색상의 정상사진을 추가해도 됩니다.</p>
+      <p class="help">정상 예시사진을 등록한 뒤 예시사진 관리에서 K3 / 아반떼 / EV3 중 차종을 지정해 주세요.</p>
     </div>
   </div>
 
@@ -87,7 +87,7 @@
   <div id="exampleFileInfo" class="message info">정상부착 예시사진을 1장 이상 선택해 주세요.</div>
 
   <button id="uploadStickerBtn" class="btn primary" style="margin-top:12px">스티커 기준 데이터 등록</button>
-  <div id="uploadStickerMessage" class="message info">등록 후 정상부착 예시사진에서 실제 스티커 영역을 한 번씩 지정하면 판정 보정 데이터가 완성됩니다.</div>
+  <div id="uploadStickerMessage" class="message info">등록 후 예시사진별 차종(K3/아반떼/EV3)과 스티커 영역을 지정해 주세요.</div>
 </section>
 
 <section class="card">
@@ -162,15 +162,35 @@
       <p class="help">정상 예시사진에서 번호판 영역까지 설정한 사진이 있을 때만 적용됩니다.</p>
     </div>
 
-    <div class="rule-card">
+    <div class="rule-card rear-rule-card">
       <div class="rule-head">
-        <div><strong>색상차이</strong><span>변색·오염 보조검사</span></div>
-        <label class="switch-row"><input id="useColor" type="checkbox"><span>사용</span></label>
+        <div>
+          <strong>후면 스티커 크기·위치</strong>
+          <span>같은 차종 정상 예시의 번호판을 기준자로 사용해 후면 스티커 크기와 상대위치를 비교</span>
+        </div>
+        <label class="switch-row"><input id="useRearGeometry" type="checkbox"><span>사용</span></label>
       </div>
-      <div class="form-group">
-        <label>허용 색상차이</label>
-        <input id="colorDifferenceMax" type="number" min="0" max="255">
+      <div class="grid-2">
+        <div class="form-group">
+          <label>최소 후면 기준 유사도 (%)</label>
+          <input id="rearGeometryMin" type="number" min="0" max="100">
+        </div>
+        <div class="form-group">
+          <label>허용 크기 차이 (%)</label>
+          <input id="rearSizeDifferenceMax" type="number" min="0" max="100">
+        </div>
       </div>
+      <p class="help">후면 정상 예시에 번호판 영역이 설정된 경우 적용됩니다. 기본값: 기준 유사도 62% 이상 / 크기차이 18% 이하.</p>
+    </div>
+
+    <div class="rule-card color-disabled-card">
+      <div class="rule-head">
+        <div><strong>색상차이</strong><span>주·야간 조명차가 커 최종 자동판정에서는 사용하지 않습니다.</span></div>
+        <span class="pill">판정 제외</span>
+      </div>
+      <p class="help">차량색상은 흰색으로 고정되어 있으므로 손상·디자인·부착위치·구조 중심으로 판정합니다.</p>
+      <input id="useColor" type="checkbox" hidden>
+      <input id="colorDifferenceMax" type="number" hidden>
     </div>
 
   </div>
@@ -305,11 +325,22 @@
     <button id="closeExamplesBtn" class="modal-close" type="button">×</button>
     <span class="step">NORMAL ATTACHMENT EXAMPLES</span>
     <h2 id="examplesModalTitle">정상부착 예시사진 관리</h2>
-    <p class="help">가이드 1번은 직원 화면에 표시됩니다. 각 사진에서 실제 스티커 부분을 드래그해 캘리브레이션 영역을 지정해 주세요.</p>
+    <p class="help">각 정상 예시사진에 차종을 지정합니다. 사용자 화면에서는 선택한 차종의 예시사진만 촬영가이드와 자동분석 기준으로 사용됩니다.</p>
 
-    <div class="form-group" style="margin-top:12px">
-      <label>예시사진 추가</label>
-      <input id="addExampleFiles" type="file" accept="image/*" multiple>
+    <div class="grid-2" style="margin-top:12px">
+      <div class="form-group">
+        <label>예시사진 추가</label>
+        <input id="addExampleFiles" type="file" accept="image/*" multiple>
+      </div>
+      <div class="form-group">
+        <label>추가 사진 차종</label>
+        <select id="addExampleVehicle">
+          <option value="">나중에 지정</option>
+          <option value="k3">K3</option>
+          <option value="avante">아반떼</option>
+          <option value="ev3">EV3</option>
+        </select>
+      </div>
     </div>
     <button id="addExamplesBtn" class="btn secondary" style="margin-top:8px">선택한 예시사진 추가</button>
     <div id="examplesMessage" class="message info">영역설정 완료 사진이 1장 이상 있어야 사용자 자동판정이 가능합니다.</div>
@@ -359,6 +390,6 @@
 </div>
 
 </main>
-<script src="/js/admin.js"></script>
+<script src="/js/admin.js?v=20.0.0"></script>
 </body>
 </html>
