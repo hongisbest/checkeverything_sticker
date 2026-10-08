@@ -3,7 +3,9 @@ const $=id=>document.getElementById(id);
 const S={
   stickers:[],
   sticker:null,
+  vehicleType:null,
   rules:null,
+  referenceCache:{},
   stream:null,
   photoBlob:null,
   photoImage:null,
@@ -18,6 +20,8 @@ const S={
   selectionMode:"sticker",
   draftSelection:null,
   plateVisibility:null,
+  plateMatchConfirmed:false,
+  plateOcrResult:null,
   submitting:false
 };
 
@@ -46,6 +50,10 @@ document.addEventListener("DOMContentLoaded",()=>{
 });
 
 function bind(){
+  document.querySelectorAll(".vehicle-tab").forEach(btn=>{
+    btn.onclick=()=>selectVehicleType(btn.dataset.vehicle);
+  });
+
   $("startCameraBtn").onclick=startCamera;
   $("captureBtn").onclick=captureVideo;
   $("photoInput").onchange=pickFile;
@@ -61,6 +69,9 @@ function bind(){
   $("stickerMissingCheck").onchange=toggleMissing;
   $("analyzeBtn").onclick=openSubmissionReview;
   $("backToSelectionBtn").onclick=backToSelection;
+  $("plateMatchConfirm").onchange=()=>{
+    S.plateMatchConfirmed=$("plateMatchConfirm").checked;
+  };
   $("submitBtn").addEventListener("click",submitInspection);
 
   ["employeeName","employeeId","department","vehicleNo"].forEach(id=>{
@@ -92,6 +103,7 @@ async function loadConfig(){
 
     if(S.stickers[0]){
       selectSticker(S.stickers[0].id);
+      renderVehicleGuide();
     }else{
       $("referenceBox").innerHTML='<div class="empty">관리자가 기준 스티커를 등록해야 합니다.</div>';
     }
@@ -99,6 +111,19 @@ async function loadConfig(){
     $("configStatus").textContent="오류";
     $("referenceBox").innerHTML=`<div class="message error">${esc(e.message)}</div>`;
   }
+}
+
+function selectVehicleType(type){
+  if(!["k3","avante","ev3"].includes(type))return;
+
+  S.vehicleType=type;
+
+  document.querySelectorAll(".vehicle-tab").forEach(btn=>{
+    btn.classList.toggle("active",btn.dataset.vehicle===type);
+  });
+
+  renderVehicleGuide();
+  resetAllAfterPhoto();
 }
 
 function selectSticker(id){
@@ -109,24 +134,60 @@ function selectSticker(id){
     b.classList.toggle("active",Number(b.dataset.id)===Number(id));
   });
 
-  const guide=S.sticker.guide_example;
+  renderVehicleGuide();
+  resetAllAfterPhoto();
+}
 
-  if(guide){
-    renderGuideExample(guide);
-  }else{
-    const box=$("referenceBox");
+function getVehicleExample(sticker=S.sticker,vehicleType=S.vehicleType){
+  if(!sticker||!vehicleType)return null;
+
+  return (sticker.examples||[]).find(x=>
+    x.vehicle_type===vehicleType && x.calibrated
+  ) || (sticker.examples||[]).find(x=>
+    x.vehicle_type===vehicleType
+  ) || null;
+}
+
+function renderVehicleGuide(){
+  const box=$("referenceBox");
+
+  if(!S.vehicleType){
     if(box._guideResizeObserver){
       box._guideResizeObserver.disconnect();
       box._guideResizeObserver=null;
     }
-    box.innerHTML='<div class="empty">관리자가 정상부착 예시사진을 등록해야 합니다.</div>';
+
+    box.innerHTML='<div class="empty">먼저 K3 / 아반떼 / EV3 중 차량 종류를 선택해 주세요.</div>';
+    $("stickerTitle").textContent=S.sticker ? S.sticker.name : "촬영가이드";
+    $("sideHintText").textContent=S.sticker
+      ? `권장 위치: ${sideLabel(S.sticker.side_hint)}`
+      : "부착 위치";
+    $("guideText").textContent="선택한 차종의 정상 예시사진만 비교기준으로 사용됩니다.";
+    return;
   }
 
-  $("stickerTitle").textContent=`${S.sticker.name} · 정상부착 예시사진 1번`;
-  $("sideHintText").textContent=`권장 위치: ${sideLabel(S.sticker.side_hint)}`;
-  $("guideText").textContent=S.sticker.guide_text || "촬영 방향은 자유입니다. 번호판과 스티커가 한 사진에 함께 선명하게 보이도록 촬영해 주세요.";
+  if(!S.sticker){
+    box.innerHTML='<div class="empty">점검할 스티커를 선택해 주세요.</div>';
+    return;
+  }
 
-  resetAllAfterPhoto();
+  const guide=getVehicleExample();
+
+  if(guide){
+    renderGuideExample(guide);
+  }else{
+    if(box._guideResizeObserver){
+      box._guideResizeObserver.disconnect();
+      box._guideResizeObserver=null;
+    }
+
+    box.innerHTML=`<div class="message error">${vehicleLabel(S.vehicleType)} 정상 예시사진이 아직 연결되지 않았습니다. 관리자에게 문의해 주세요.</div>`;
+  }
+
+  $("stickerTitle").textContent=`${vehicleLabel(S.vehicleType)} · ${S.sticker.name}`;
+  $("sideHintText").textContent=`권장 위치: ${sideLabel(S.sticker.side_hint)}`;
+  $("guideText").textContent=S.sticker.guide_text ||
+    "촬영 방향은 자유입니다. 번호판과 스티커가 한 사진에 함께 선명하게 보이도록 촬영해 주세요.";
 }
 
 function renderGuideExample(guide){
@@ -245,8 +306,19 @@ async function pickFile(e){
 }
 
 async function preparePhoto(blob){
+  if(!S.vehicleType){
+    alert("먼저 차량 종류(K3 / 아반떼 / EV3)를 선택해 주세요.");
+    return;
+  }
+
   if(!S.sticker){
     alert("먼저 점검할 스티커를 선택해 주세요.");
+    return;
+  }
+
+  const vehicleExample=getVehicleExample();
+  if(!vehicleExample||!vehicleExample.calibrated){
+    alert(`${vehicleLabel(S.vehicleType)} 정상 예시사진의 스티커 영역이 아직 설정되지 않았습니다. 관리자에게 문의해 주세요.`);
     return;
   }
 
@@ -266,6 +338,8 @@ async function preparePhoto(blob){
   S.selection=null;
   S.plateSelection=null;
   S.plateVisibility=null;
+  S.plateMatchConfirmed=false;
+  S.plateOcrResult=null;
   S.draftSelection=null;
   S.analyzedSelection=null;
 
@@ -365,6 +439,9 @@ function endSelect(){
   }else{
     S.plateSelection={...S.draftSelection};
     S.plateVisibility=analyzePlateVisibility(S.photoImage,S.plateSelection);
+    S.plateMatchConfirmed=false;
+    S.plateOcrResult=null;
+    if($("plateMatchConfirm"))$("plateMatchConfirm").checked=false;
 
     renderBox($("plateSelectionBox"),S.plateSelection);
     $("plateSelectionBox").classList.remove("hidden");
@@ -416,7 +493,10 @@ function resetStickerSelection(){
 function resetPlateSelection(){
   S.plateSelection=null;
   S.plateVisibility=null;
+  S.plateMatchConfirmed=false;
+  S.plateOcrResult=null;
 
+  if($("plateMatchConfirm"))$("plateMatchConfirm").checked=false;
   $("plateSelectionBox").classList.add("hidden");
   $("plateSelectionState").textContent="번호판 미지정";
   $("plateSelectionState").className="pill review";
@@ -473,6 +553,129 @@ function updateRequiredAreaState(){
     $("requiredAreaMessage").className="message warn";
     $("requiredAreaMessage").textContent=`${missing.join("와 ")} 영역을 지정해 주세요.`;
   }
+}
+
+function normalizeVehicleNo(value){
+  return String(value||"")
+    .toUpperCase()
+    .replace(/[\s\-·.]/g,"")
+    .replace(/[^0-9가-힣A-Z]/g,"");
+}
+
+function isPlausibleKoreanVehicleNo(value){
+  const v=normalizeVehicleNo(value);
+
+  // Common Korean plate forms such as 12가3456 / 123가4567.
+  // Region-name legacy plates are not rejected solely for being longer.
+  return (
+    /^[0-9]{2,3}[가-힣][0-9]{4}$/.test(v) ||
+    /^[가-힣]{1,4}[0-9]{1,2}[가-힣][0-9]{4}$/.test(v)
+  );
+}
+
+async function tryNativePlateOcr(enteredVehicleNo){
+  const target=normalizeVehicleNo(enteredVehicleNo);
+
+  if(!S.photoImage||!S.plateSelection){
+    showManualPlateFallback();
+    return;
+  }
+
+  if(typeof window.TextDetector!=="function"){
+    S.plateOcrResult={
+      supported:false,
+      text:"",
+      matched:false
+    };
+    showManualPlateFallback();
+    return;
+  }
+
+  const source=cropBoxCanvas(S.photoImage,S.plateSelection,1200);
+  const prepared=preparePlateForOcr(source);
+
+  try{
+    const detector=new window.TextDetector();
+    const results=await detector.detect(prepared);
+
+    const raw=(results||[])
+      .map(x=>x.rawValue||x.text||"")
+      .filter(Boolean)
+      .join(" ");
+
+    const normalized=normalizeVehicleNo(raw);
+    const matched=Boolean(target && normalized && (
+      normalized===target ||
+      normalized.includes(target) ||
+      target.includes(normalized)
+    ));
+
+    S.plateOcrResult={
+      supported:true,
+      text:normalized||raw.trim(),
+      matched
+    };
+
+    $("plateOcrPreview").textContent=normalized||raw.trim()||"문자 인식 실패";
+
+    if(matched){
+      $("plateOcrMessage").className="message success";
+      $("plateOcrMessage").textContent="자동판독 결과가 입력한 차량번호와 일치합니다. 번호판을 한 번 눈으로 확인해 주세요.";
+      $("plateMatchConfirm").checked=true;
+      S.plateMatchConfirmed=true;
+    }else{
+      $("plateOcrMessage").className="message warn";
+      $("plateOcrMessage").textContent=normalized
+        ? `자동판독 후보 '${normalized}'와 입력값 '${target}'이 일치하지 않습니다. OCR 오인식 가능성이 있으므로 확대사진을 직접 확인해 주세요.`
+        : "자동판독에 실패했습니다. 확대된 번호판을 직접 확인해 주세요.";
+    }
+  }catch(e){
+    S.plateOcrResult={
+      supported:true,
+      text:"",
+      matched:false,
+      error:true
+    };
+    showManualPlateFallback();
+  }
+}
+
+function showManualPlateFallback(){
+  $("plateOcrPreview").textContent="자동판독 미지원/실패";
+  $("plateOcrMessage").className="message info";
+  $("plateOcrMessage").textContent="이 브라우저에서는 한국 번호판 자동판독을 안정적으로 사용할 수 없습니다. 확대된 번호판과 입력 차량번호를 직접 대조해 주세요.";
+}
+
+function preparePlateForOcr(source){
+  const scale=2;
+  const c=document.createElement("canvas");
+  c.width=Math.max(1,source.width*scale);
+  c.height=Math.max(1,source.height*scale);
+
+  const ctx=c.getContext("2d",{willReadFrequently:true});
+  ctx.imageSmoothingEnabled=true;
+  ctx.drawImage(source,0,0,c.width,c.height);
+
+  const image=ctx.getImageData(0,0,c.width,c.height);
+  const d=image.data;
+
+  let sum=0;
+  for(let i=0;i<d.length;i+=4){
+    const g=.299*d[i]+.587*d[i+1]+.114*d[i+2];
+    sum+=g;
+  }
+  const mean=sum/(d.length/4);
+  const threshold=Math.max(80,Math.min(190,mean*.92));
+
+  for(let i=0;i<d.length;i+=4){
+    const g=.299*d[i]+.587*d[i+1]+.114*d[i+2];
+    const v=g>threshold?255:0;
+    d[i]=d[i+1]=d[i+2]=v;
+    d[i+3]=255;
+  }
+
+  ctx.putImageData(image,0,0);
+  return c;
 }
 
 function analyzePlateVisibility(img,s){
@@ -591,6 +794,21 @@ function renderSubmissionReview(){
   $("reviewPlateState").textContent="영역 확인완료";
   $("reviewPlateState").className="pill normal";
   renderQualityMessage("reviewPlateQuality",plateQuality,"번호판");
+
+  const entered=$("vehicleNo").value.trim();
+  $("enteredVehicleNoPreview").textContent=entered||"-";
+
+  S.plateMatchConfirmed=false;
+  S.plateOcrResult=null;
+  $("plateMatchConfirm").checked=false;
+  $("plateOcrPreview").textContent="판독 중...";
+  $("plateOcrMessage").className="message info";
+  $("plateOcrMessage").textContent="번호판 자동판독 가능 여부를 확인하고 있습니다.";
+
+  tryNativePlateOcr(entered).catch(e=>{
+    console.warn("plate OCR attempt failed",e);
+    showManualPlateFallback();
+  });
 }
 
 function renderReviewCrop(targetId,selection,label){
@@ -708,7 +926,7 @@ async function buildAdminOnlyAnalysis(){
       score:0,
       status:"판정불가",
       recommendation:"",
-      findings:["정상부착 예시사진의 스티커 영역 캘리브레이션이 없어 자동판정을 수행하지 못했습니다."],
+      findings:[`${vehicleLabel(snapshot.vehicleType)} 정상 예시사진 또는 스티커 영역 설정이 없어 자동판정을 수행하지 못했습니다.`],
       metrics:{damage:0,shape:0,color:0,confidence:0,missing:false}
     };
     S.analyzedSelection=S.selection;
@@ -1082,26 +1300,13 @@ function stabilizeSelection(s,photoW,photoH,referenceAspect){
 }
 
 function selectionSearchVariants(base){
-  const out=[];
-
-  const scales=[.90,1,1.10];
-  const offsets=[
-    [0,0],
-    [-.04,0],
-    [.04,0],
-    [0,-.035],
-    [0,.035]
-  ];
-
-  for(const scale of scales){
-    out.push(scaleBox(base,scale,0,0));
-  }
-
-  for(const [dx,dy] of offsets.slice(1)){
-    out.push(scaleBox(base,1,dx,dy));
-  }
-
-  return uniqueBoxes(out);
+  return uniqueBoxes([
+    scaleBox(base,.94,0,0),
+    scaleBox(base,1,0,0),
+    scaleBox(base,1.06,0,0),
+    scaleBox(base,1,-.035,0),
+    scaleBox(base,1,.035,0)
+  ]);
 }
 
 function scaleBox(box,scale,dx,dy){
@@ -1520,6 +1725,13 @@ async function submitInspection(event){
       throw new UserSubmitError("성명과 차량번호를 입력해 주세요.","profile");
     }
 
+    if(!isPlausibleKoreanVehicleNo(vehicle)){
+      throw new UserSubmitError(
+        "입력한 차량번호 형식을 다시 확인해 주세요. 예: 222하1701",
+        "profile"
+      );
+    }
+
     if(!S.plateSelection){
       throw new UserSubmitError(
         "번호판 영역이 지정되지 않았습니다. STEP 04에서 번호판을 다시 지정해 주세요.",
@@ -1545,6 +1757,13 @@ async function submitInspection(event){
       throw new UserSubmitError(
         "번호판 영역이 너무 작거나 흐려 확인하기 어렵습니다. 번호판이 더 크게 보이도록 영역을 다시 지정하거나 사진을 다시 촬영해 주세요.",
         "selection"
+      );
+    }
+
+    if(!S.plateMatchConfirmed||!$("plateMatchConfirm").checked){
+      throw new UserSubmitError(
+        "촬영된 번호판과 입력한 차량번호가 같은지 확인한 뒤 '일치함을 확인했습니다'에 체크해 주세요.",
+        "review"
       );
     }
 
@@ -1574,6 +1793,7 @@ async function submitInspection(event){
     // Snapshot for admin-only analysis after the raw data has been stored.
     const analysisSnapshot={
       sticker:S.sticker,
+      vehicleType:S.vehicleType,
       rules:S.rules||defaultRules(),
       photoImage:S.photoImage,
       selection:S.selection ? {...S.selection} : null,
@@ -1601,8 +1821,14 @@ async function submitInspection(event){
     const pendingMetrics={
       userAnalysisHidden:true,
       analysisPending:true,
+      vehicleType:S.vehicleType,
       stickerCaptureQuality:stickerQuality,
       plateConfirmed:true,
+      plateManualMatch:true,
+      enteredVehicleNoNormalized:normalizeVehicleNo(vehicle),
+      plateOcrSupported:Boolean(S.plateOcrResult?.supported),
+      plateOcrText:S.plateOcrResult?.text||"",
+      plateOcrMatched:S.plateOcrResult?.matched===true,
       plateVisibilityScore:Number(plateQuality.score||0),
       plateCaptureQuality:plateQuality,
       plateCrop:S.plateSelection,
@@ -1712,6 +1938,12 @@ async function submitInspection(event){
         });
       }else if(e.target==="profile"){
         window.scrollTo({top:0,behavior:"smooth"});
+      }else if(e.target==="review"){
+        $("submissionSection").classList.remove("hidden");
+        $("submissionSection").scrollIntoView({
+          behavior:"smooth",
+          block:"start"
+        });
       }
     }
   }finally{
@@ -1873,6 +2105,8 @@ function resetAfterSuccessfulSubmit(){
   S.selection=null;
   S.plateSelection=null;
   S.plateVisibility=null;
+  S.plateMatchConfirmed=false;
+  S.plateOcrResult=null;
   S.draftSelection=null;
   S.analyzedSelection=null;
   S.analysis=null;
@@ -1939,8 +2173,14 @@ async function runBackgroundAdminAnalysis(id,token,snapshot){
     ...analysis.metrics,
     userAnalysisHidden:true,
     analysisPending:false,
+    vehicleType:snapshot.vehicleType,
     stickerCaptureQuality:snapshot.stickerQuality,
     plateConfirmed:true,
+    plateManualMatch:true,
+    enteredVehicleNoNormalized:normalizeVehicleNo($("vehicleNo").value),
+    plateOcrSupported:Boolean(S.plateOcrResult?.supported),
+    plateOcrText:S.plateOcrResult?.text||"",
+    plateOcrMatched:S.plateOcrResult?.matched===true,
     plateVisibilityScore:Number(snapshot.plateQuality?.score||0),
     plateCaptureQuality:snapshot.plateQuality,
     plateCrop:snapshot.plateSelection,
@@ -1988,7 +2228,9 @@ async function buildSnapshotAnalysis(snapshot){
     };
   }
 
-  const calibrated=(snapshot.sticker.examples||[]).filter(x=>x.calibrated);
+  const calibrated=(snapshot.sticker.examples||[]).filter(x=>
+    x.calibrated && x.vehicle_type===snapshot.vehicleType
+  );
 
   if(!calibrated.length){
     return{
@@ -2035,34 +2277,16 @@ async function buildSnapshotAnalysis(snapshot){
 }
 
 async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
-  const master=await loadImage(snapshot.sticker.image_url);
-  const masterDescriptor=buildMasterDescriptor(master);
-  const normalRecords=[];
-
-  for(let i=0;i<examples.length;i++){
-    const ex=examples[i];
-    const img=await loadImage(ex.image_url);
-
-    const crop=cropImageElement(img,{
-      x:Number(ex.crop_x),
-      y:Number(ex.crop_y),
-      width:Number(ex.crop_width),
-      height:Number(ex.crop_height)
-    },1000);
-
-    const cmp=await compareNormalizedStructureResponsive(masterDescriptor,crop);
-    normalRecords.push({ex,cmp});
-    await yieldToBrowser();
-  }
-
-  const normalComparisons=normalRecords.map(x=>x.cmp);
-  const calibration=buildCalibration(masterDescriptor,normalComparisons);
+  const reference=await getVehicleReferenceBundle(snapshot,examples[0]);
+  const masterDescriptor=reference.masterDescriptor;
+  const normalRecords=[reference.normalRecord];
+  const calibration=reference.calibration;
 
   const base=stabilizeSelection(
     snapshot.selection,
     snapshot.photoImage.naturalWidth,
     snapshot.photoImage.naturalHeight,
-    master.naturalWidth/Math.max(1,master.naturalHeight)
+    masterDescriptor.W/masterDescriptor.H
   );
 
   const candidates=selectionSearchVariants(base);
@@ -2070,7 +2294,7 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
 
   for(let i=0;i<candidates.length;i++){
     const box=candidates[i];
-    const canvas=cropBoxCanvas(snapshot.photoImage,box,1100);
+    const canvas=cropBoxCanvas(snapshot.photoImage,box,1000);
     const cmp=await compareNormalizedStructureResponsive(masterDescriptor,canvas);
     const nearest=findNearestNormalExample(cmp,normalRecords,masterDescriptor,calibration);
 
@@ -2108,14 +2332,17 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
   );
 
   const confidence=r1(clamp(best.nearest.matchScore*100,0,100));
-  const color=calibratedColorDifference(best.cmp.colorVector,normalComparisons);
   const placement=placementSimilarityScore(snapshot,normalRecords);
+  const rearGeometry=snapshot.sticker.side_hint==="rear"
+    ? rearGeometryComparison(snapshot,normalRecords)
+    : null;
 
   const designCalibration=calibrateNormalDesignRange(
     normalRecords,
     calibration,
     masterDescriptor,
-    snapshot.rules||defaultRules()
+    snapshot.rules||defaultRules(),
+    confidence
   );
 
   const metrics={
@@ -2129,16 +2356,23 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     designCalibrationCount:designCalibration.count,
     designCalibrationMode:designCalibration.mode,
     placementSimilarity:Number.isFinite(placement?.score)?r1(placement.score):null,
-    color:r1(color),
+    rearGeometrySimilarity:Number.isFinite(rearGeometry?.score)?r1(rearGeometry.score):null,
+    rearSizeDifference:Number.isFinite(rearGeometry?.sizeDifferencePct)?r1(rearGeometry.sizeDifferencePct):null,
+    rearWidthDifference:Number.isFinite(rearGeometry?.widthDifferencePct)?r1(rearGeometry.widthDifferencePct):null,
+    rearHeightDifference:Number.isFinite(rearGeometry?.heightDifferencePct)?r1(rearGeometry.heightDifferencePct):null,
+    rearOffsetDifference:Number.isFinite(rearGeometry?.offsetDifference)?r1(rearGeometry.offsetDifference):null,
+    color:null,
     confidence,
+    vehicleType:snapshot.vehicleType,
+    sideHint:snapshot.sticker.side_hint,
     rawStructureDifference:r1((1-best.cmp.global)*100),
     nearestExampleId:Number(nearestRecord.ex.id),
     nearestExampleSimilarity:r1(best.nearest.matchScore*100),
     largestDamageCluster:r1(residual.largestClusterPct),
     distributedDifference:r1(residual.distributedPct),
     stableCells:calibration.stableIndices.length,
-    normalExamples:normalComparisons.length,
-    placementExamples:normalRecords.filter(x=>x.ex.plate_calibrated).length,
+    normalExamples:1,
+    placementExamples:nearestRecord.ex.plate_calibrated?1:0,
     missing:false
   };
 
@@ -2164,21 +2398,51 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
       }
     }
 
-    if(Number(rules.use_design ?? 1)===1 &&
-       metrics.designSimilarity<metrics.designThreshold){
-      status="확인필요";
-      findings.push(
-        `디자인 동일성 ${metrics.designSimilarity}% < ${metrics.designCalibrationMode==="dynamic"?"스티커별 자동기준":"고정기준"} ${metrics.designThreshold}% → 기준 스티커와 폰트·로고·자간·그래픽 형상이 다를 가능성`
-      );
-    }
+    const isRear=snapshot.sticker.side_hint==="rear";
 
-    if(Number(rules.use_placement ?? 1)===1 &&
-       Number.isFinite(metrics.placementSimilarity) &&
-       metrics.placementSimilarity<Number(rules.placement_similarity_min ?? 55)){
-      status="확인필요";
-      findings.push(
-        `부착위치 유사도 ${metrics.placementSimilarity}% → 정상 예시 대비 위치·방향 확인필요`
-      );
+    if(isRear){
+      if(Number(rules.use_rear_geometry ?? 1)===1 &&
+         Number.isFinite(metrics.rearGeometrySimilarity)){
+        if(metrics.rearSizeDifference>Number(rules.rear_size_difference_max ?? 18)){
+          status="확인필요";
+          findings.push(
+            `후면 스티커 크기차이 ${metrics.rearSizeDifference}% → 번호판 대비 정상 예시 크기와 차이가 큼`
+          );
+        }
+
+        if(metrics.rearGeometrySimilarity<Number(rules.rear_geometry_min ?? 62)){
+          status="확인필요";
+          findings.push(
+            `후면 기준 유사도 ${metrics.rearGeometrySimilarity}% → 같은 차종 정상 예시 대비 크기·상대위치 확인필요`
+          );
+        }
+      }
+
+      const rearDesignFloor=Math.min(metrics.designThreshold,55);
+      if(Number(rules.use_design ?? 1)===1 &&
+         metrics.designSimilarity<rearDesignFloor){
+        status="확인필요";
+        findings.push(
+          `후면 디자인 동일성 ${metrics.designSimilarity}% → 기준 원본과 형상이 크게 다를 가능성`
+        );
+      }
+    }else{
+      if(Number(rules.use_design ?? 1)===1 &&
+         metrics.designSimilarity<metrics.designThreshold){
+        status="확인필요";
+        findings.push(
+          `디자인 동일성 ${metrics.designSimilarity}% < 차종별 기준 ${metrics.designThreshold}% → 기준 스티커와 폰트·로고·자간·그래픽 형상이 다를 가능성`
+        );
+      }
+
+      if(Number(rules.use_placement ?? 1)===1 &&
+         Number.isFinite(metrics.placementSimilarity) &&
+         metrics.placementSimilarity<Number(rules.placement_similarity_min ?? 55)){
+        status="확인필요";
+        findings.push(
+          `부착위치 유사도 ${metrics.placementSimilarity}% → ${vehicleLabel(snapshot.vehicleType)} 정상 예시 대비 위치·방향 확인필요`
+        );
+      }
     }
 
     if(Number(rules.use_shape)===1&&metrics.shape<Number(rules.shape_similarity_min)){
@@ -2186,31 +2450,29 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
       findings.push(`구조 보존율 ${metrics.shape}% → 로고·문구·그래픽 구조 확인필요`);
     }
 
-    if(Number(rules.use_color)===1&&metrics.color>Number(rules.color_difference_max)){
-      status="확인필요";
-      findings.push(`정상부착 예시 대비 색상차이 ${metrics.color} → 변색·오염 확인필요`);
-    }
-
     if(!findings.length){
       findings.push(
-        "촬영각도에 가장 가까운 정상 예시의 변동범위를 제외한 결과, 손상·디자인·부착위치에서 뚜렷한 이상징후가 없습니다."
+        `${vehicleLabel(snapshot.vehicleType)} 정상 예시사진과 비교한 결과 손상·디자인·부착위치에서 뚜렷한 이상징후가 없습니다.`
       );
     }
   }
 
-  const placementForScore=Number.isFinite(metrics.placementSimilarity)
-    ? metrics.placementSimilarity
-    : 100;
+  const placementForScore=snapshot.sticker.side_hint==="rear"
+    ? (Number.isFinite(metrics.rearGeometrySimilarity) ? metrics.rearGeometrySimilarity : 100)
+    : (Number.isFinite(metrics.placementSimilarity) ? metrics.placementSimilarity : 100);
+
+  const designForScore=snapshot.sticker.side_hint==="rear"
+    ? Math.max(metrics.designSimilarity,70)
+    : metrics.designSimilarity;
 
   const score=status==="판정불가"
     ? r1(confidence*.5)
     : r1(clamp(
-        (100-metrics.damage)*.34+
-        metrics.designSimilarity*.28+
+        (100-metrics.damage)*.38+
+        designForScore*.30+
         metrics.shape*.18+
         placementForScore*.08+
-        confidence*.08+
-        (100-Math.min(100,metrics.color))*.04,
+        confidence*.06,
         0,100
       ));
 
@@ -2226,102 +2488,57 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
   };
 }
 
+async function getVehicleReferenceBundle(snapshot,example){
+  const key=`v18:${snapshot.sticker.id}:${example.id}`;
 
-function calibrateNormalDesignRange(normalRecords,calibration,masterDescriptor,rules){
+  if(S.referenceCache[key]){
+    return S.referenceCache[key];
+  }
+
+  const master=await loadImage(snapshot.sticker.image_url);
+  const masterDescriptor=buildMasterDescriptor(master);
+  const img=await loadImage(example.image_url);
+
+  const crop=cropImageElement(img,{
+    x:Number(example.crop_x),
+    y:Number(example.crop_y),
+    width:Number(example.crop_width),
+    height:Number(example.crop_height)
+  },1000);
+
+  const cmp=await compareNormalizedStructureResponsive(masterDescriptor,crop);
+  const normalRecord={ex:example,cmp};
+  const calibration=buildCalibration(masterDescriptor,[cmp]);
+
+  const bundle={masterDescriptor,normalRecord,calibration};
+  S.referenceCache[key]=bundle;
+  return bundle;
+}
+
+function calibrateNormalDesignRange(normalRecords,calibration,masterDescriptor,rules,confidence=80){
   const fallback=clamp(Number(rules?.design_similarity_min ?? 82),0,100);
 
-  if(!Array.isArray(normalRecords)||normalRecords.length<2){
+  if(normalRecords.length===1){
+    const qualityAdaptive=clamp(confidence-7,66,74);
     return{
-      mode:"fallback",
-      threshold:fallback,
-      median:fallback,
-      q25:fallback,
-      minimum:fallback,
-      count:normalRecords?.length||0,
-      scores:[]
+      mode:"vehicle-specific",
+      threshold:Math.min(fallback,qualityAdaptive),
+      median:100,
+      q25:100,
+      minimum:100,
+      count:1,
+      scores:[100]
     };
   }
-
-  const scores=[];
-
-  for(let i=0;i<normalRecords.length;i++){
-    const current=normalRecords[i];
-    const others=normalRecords.filter((_,j)=>j!==i);
-
-    if(!others.length)continue;
-
-    const nearest=findNearestNormalExample(
-      current.cmp,
-      others,
-      masterDescriptor,
-      calibration
-    );
-
-    if(!nearest?.record)continue;
-
-    const residual=buildAngleAdjustedResidual(
-      current.cmp,
-      nearest.record.cmp,
-      calibration,
-      masterDescriptor
-    );
-
-    const score=designFidelityScore(
-      current.cmp,
-      nearest.record.cmp,
-      residual,
-      calibration,
-      masterDescriptor
-    );
-
-    if(Number.isFinite(score))scores.push(score);
-  }
-
-  if(scores.length<2){
-    return{
-      mode:"fallback",
-      threshold:fallback,
-      median:fallback,
-      q25:fallback,
-      minimum:fallback,
-      count:scores.length,
-      scores
-    };
-  }
-
-  const sorted=scores.slice().sort((a,b)=>a-b);
-  const medianScore=percentileValue(sorted,.50);
-  const q25=percentileValue(sorted,.25);
-  const minimum=sorted[0];
-
-  /*
-    Dynamic normal threshold:
-    - Three different normal vehicle examples are treated as the actual normal range.
-    - The lower quartile and median are given enough margin for perspective,
-      reflection, distance and phone-camera differences.
-    - 58% is a hard lower safety floor so clearly different handmade designs
-      are not normalized away merely because normal samples are diverse.
-    - 82% is the upper cap; a very clean sample set does not make the rule
-      stricter than the previous fixed rule.
-  */
-  const threshold=clamp(
-    Math.min(
-      q25-6,
-      medianScore-10,
-      minimum-3
-    ),
-    58,
-    82
-  );
 
   return{
-    mode:"dynamic",
-    threshold,
-    median:medianScore,
-    q25,
-    minimum,
-    count:scores.length,
-    scores
+    mode:"fallback",
+    threshold:fallback,
+    median:fallback,
+    q25:fallback,
+    minimum:fallback,
+    count:normalRecords?.length||0,
+    scores:[]
   };
 }
 
@@ -2607,6 +2824,108 @@ function vectorSimilarity(a,b){
   return clamp(dot/Math.sqrt(na*nb),0,1);
 }
 
+function rearGeometryComparison(snapshot,normalRecords){
+  if(!snapshot.plateSelection||!snapshot.selection)return null;
+
+  const user=rearGeometrySignature(snapshot.selection,snapshot.plateSelection);
+  if(!user)return null;
+
+  let best=null;
+
+  for(const record of normalRecords){
+    const ex=record.ex;
+    if(!ex.plate_calibrated)continue;
+
+    const normal=rearGeometrySignature(
+      {
+        x:Number(ex.crop_x),
+        y:Number(ex.crop_y),
+        width:Number(ex.crop_width),
+        height:Number(ex.crop_height)
+      },
+      {
+        x:Number(ex.plate_x),
+        y:Number(ex.plate_y),
+        width:Number(ex.plate_width),
+        height:Number(ex.plate_height)
+      }
+    );
+
+    if(!normal)continue;
+
+    const widthDifferencePct=symmetricScaleDifferencePct(
+      user.widthRatio/Math.max(.0001,normal.widthRatio)
+    );
+    const heightDifferencePct=symmetricScaleDifferencePct(
+      user.heightRatio/Math.max(.0001,normal.heightRatio)
+    );
+
+    const sizeDifferencePct=
+      widthDifferencePct*.72+
+      heightDifferencePct*.28;
+
+    const dxDiff=Math.abs(user.offsetX-normal.offsetX);
+    const dyDiff=Math.abs(user.offsetY-normal.offsetY);
+
+    const offsetDifference=Math.sqrt(
+      (dxDiff/.28)**2*.56+
+      (dyDiff/.38)**2*.44
+    );
+
+    const sizePenalty=
+      (Math.min(100,sizeDifferencePct)/24)**2;
+
+    const positionPenalty=
+      offsetDifference**2;
+
+    const score=clamp(
+      Math.exp(-(sizePenalty*.58 + positionPenalty*.42))*100,
+      0,100
+    );
+
+    const result={
+      score,
+      sizeDifferencePct,
+      widthDifferencePct,
+      heightDifferencePct,
+      offsetDifference,
+      exampleId:Number(ex.id)
+    };
+
+    if(!best||score>best.score)best=result;
+  }
+
+  return best;
+}
+
+function rearGeometrySignature(sticker,plate){
+  if(!sticker||!plate||
+     plate.width<=.005||plate.height<=.005||
+     sticker.width<=.005||sticker.height<=.005){
+    return null;
+  }
+
+  const pcx=plate.x+plate.width/2;
+  const pcy=plate.y+plate.height/2;
+  const scx=sticker.x+sticker.width/2;
+  const scy=sticker.y+sticker.height/2;
+
+  return{
+    widthRatio:sticker.width/plate.width,
+    heightRatio:sticker.height/plate.height,
+    offsetX:(scx-pcx)/plate.width,
+    offsetY:(scy-pcy)/plate.height
+  };
+}
+
+function symmetricScaleDifferencePct(ratio){
+  if(!Number.isFinite(ratio)||ratio<=0)return 100;
+  return clamp(
+    (Math.exp(Math.abs(Math.log(ratio)))-1)*100,
+    0,100
+  );
+}
+
 function placementSimilarityScore(snapshot,normalRecords){
   if(!snapshot.plateSelection||!snapshot.selection)return null;
 
@@ -2690,47 +3009,45 @@ async function compareNormalizedStructureResponsive(masterDescriptor,imageOrCanv
   let best=null;
   let iteration=0;
 
-  const scales=[.92,1,1.08];
-  const shifts=[-8,0,8];
+  const scales=[.94,1,1.06];
+  const xShifts=[-6,0,6];
+  const yShifts=[-4,0,4];
 
-  for(const sx of scales){
-    for(const sy of scales){
-      for(const tx of shifts){
-        for(const ty of shifts){
-          const transformed=transformCanvas(
-            canvas,
-            masterDescriptor.W,
-            masterDescriptor.H,
-            sx,sy,tx,ty
-          );
+  for(const scale of scales){
+    for(const tx of xShifts){
+      for(const ty of yShifts){
+        const transformed=transformCanvas(
+          canvas,
+          masterDescriptor.W,
+          masterDescriptor.H,
+          scale,scale,tx,ty
+        );
 
-          const hog=hogGridFromCanvas(
-            transformed,
-            masterDescriptor.CELL,
-            masterDescriptor.BINS
-          );
+        const hog=hogGridFromCanvas(
+          transformed,
+          masterDescriptor.CELL,
+          masterDescriptor.BINS
+        );
 
-          const result=hogSimilarity(
-            masterDescriptor.hog,
-            hog,
-            masterDescriptor.informative
-          );
+        const result=hogSimilarity(
+          masterDescriptor.hog,
+          hog,
+          masterDescriptor.informative
+        );
 
-          if(!best||result.weightedMean>best.global){
-            best={
-              sims:Array.from(result.sims),
-              global:result.weightedMean,
-              canvas:transformed,
-              colorVector:dominantChromaticVector(transformed),
-              hogHistograms:hog.histograms.map(h=>Array.from(h)),
-              edgeSignature:edgeProjectionSignature(transformed)
-            };
-          }
+        if(!best||result.weightedMean>best.global){
+          best={
+            sims:Array.from(result.sims),
+            global:result.weightedMean,
+            canvas:transformed,
+            hogHistograms:hog.histograms.map(h=>Array.from(h)),
+            edgeSignature:edgeProjectionSignature(transformed)
+          };
+        }
 
-          iteration++;
-          if(iteration%9===0){
-            await yieldToBrowser();
-          }
+        iteration++;
+        if(iteration%9===0){
+          await yieldToBrowser();
         }
       }
     }
@@ -2775,13 +3092,24 @@ function defaultRules(){
     shape_similarity_min:72,
     design_similarity_min:82,
     placement_similarity_min:55,
+    rear_geometry_min:62,
+    rear_size_difference_max:18,
     color_difference_max:35,
     use_damage:1,
     use_shape:1,
     use_design:1,
     use_placement:1,
-    use_color:1
+    use_rear_geometry:1,
+    use_color:0
   };
+}
+
+function vehicleLabel(v){
+  return({
+    k3:"K3",
+    avante:"아반떼",
+    ev3:"EV3"
+  })[v]||v||"";
 }
 
 function sideLabel(v){
