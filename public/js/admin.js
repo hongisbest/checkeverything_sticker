@@ -964,9 +964,11 @@ async function loadInspections(){
                   <span>점수 ${Number(x.score).toFixed(1)} · <b>${esc(x.status)}</b></span>
                   <span>${x.status==="분석대기"
                     ? "자동분석 대기 중 · 사진과 선택영역은 저장 완료"
-                    : `보정 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 동일성 ${Number(metrics.designSimilarity??0).toFixed(1)}% (기준 ${Number(metrics.designThreshold??0).toFixed(1)}%) · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`}</span>
+                    : (metrics.sideHint==="rear"
+                        ? `후면 참고값(판정 제외): 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 ${Number(metrics.designSimilarity??0).toFixed(1)}% · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`
+                        : `보정 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 동일성 ${Number(metrics.designSimilarity??0).toFixed(1)}% (기준 ${Number(metrics.designThreshold??0).toFixed(1)}%) · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`)}</span>
                   <span>${metrics.sideHint==="rear" && Number.isFinite(Number(metrics.rearGeometrySimilarity))
-                    ? `후면 기준 유사도 ${Number(metrics.rearGeometrySimilarity).toFixed(1)}% · 크기차이 ${Number(metrics.rearSizeDifference).toFixed(1)}% · 좌우 ${metrics.rearSideMismatch===true
+                    ? `후면 기준 유사도 ${Number(metrics.rearGeometrySimilarity).toFixed(1)}% · 규격차이 ${Number(metrics.rearSizeDifference).toFixed(1)}% · 수평차이 ${Number(metrics.rearHorizontalDifference??0).toFixed(1)}% · 수직차이 ${Number(metrics.rearVerticalDifference??0).toFixed(1)}% · 좌우 ${metrics.rearSideMismatch===true
                         ? `불일치(정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)})`
                         : "일치"}`
                     : (Number.isFinite(Number(metrics.placementSimilarity))
