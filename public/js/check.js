@@ -2361,6 +2361,9 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     rearWidthDifference:Number.isFinite(rearGeometry?.widthDifferencePct)?r1(rearGeometry.widthDifferencePct):null,
     rearHeightDifference:Number.isFinite(rearGeometry?.heightDifferencePct)?r1(rearGeometry.heightDifferencePct):null,
     rearOffsetDifference:Number.isFinite(rearGeometry?.offsetDifference)?r1(rearGeometry.offsetDifference):null,
+    rearSideMismatch:rearGeometry?.sideMismatch===true,
+    rearUserSide:rearGeometry?.userSide||null,
+    rearNormalSide:rearGeometry?.normalSide||null,
     color:null,
     confidence,
     vehicleType:snapshot.vehicleType,
@@ -2401,6 +2404,14 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     const isRear=snapshot.sticker.side_hint==="rear";
 
     if(isRear){
+      if(Number(rules.use_rear_geometry ?? 1)===1 &&
+         metrics.rearSideMismatch===true){
+        status="확인필요";
+        findings.push(
+          `후면 좌우 부착위치 불일치 → 정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)}`
+        );
+      }
+
       if(Number(rules.use_rear_geometry ?? 1)===1 &&
          Number.isFinite(metrics.rearGeometrySimilarity)){
         if(metrics.rearSizeDifference>Number(rules.rear_size_difference_max ?? 18)){
@@ -2872,16 +2883,24 @@ function rearGeometryComparison(snapshot,normalRecords){
       (dyDiff/.38)**2*.44
     );
 
+    const sideMismatch=rearSideMismatch(user,normal);
+
     const sizePenalty=
       (Math.min(100,sizeDifferencePct)/24)**2;
 
     const positionPenalty=
       offsetDifference**2;
 
-    const score=clamp(
+    let score=clamp(
       Math.exp(-(sizePenalty*.58 + positionPenalty*.42))*100,
       0,100
     );
+
+    // A rear sticker on the opposite side of the number plate is never
+    // considered the same placement, even if size/height are otherwise similar.
+    if(sideMismatch){
+      score=Math.min(score,12);
+    }
 
     const result={
       score,
@@ -2889,6 +2908,11 @@ function rearGeometryComparison(snapshot,normalRecords){
       widthDifferencePct,
       heightDifferencePct,
       offsetDifference,
+      sideMismatch,
+      userSide:user.side,
+      normalSide:normal.side,
+      userOffsetX:user.offsetX,
+      normalOffsetX:normal.offsetX,
       exampleId:Number(ex.id)
     };
 
@@ -2910,12 +2934,49 @@ function rearGeometrySignature(sticker,plate){
   const scx=sticker.x+sticker.width/2;
   const scy=sticker.y+sticker.height/2;
 
+  const offsetX=(scx-pcx)/plate.width;
+  const offsetY=(scy-pcy)/plate.height;
+
   return{
     widthRatio:sticker.width/plate.width,
     heightRatio:sticker.height/plate.height,
-    offsetX:(scx-pcx)/plate.width,
-    offsetY:(scy-pcy)/plate.height
+    offsetX,
+    offsetY,
+    side:rearSideFromOffset(offsetX)
   };
+}
+
+function rearSideFromOffset(offsetX){
+  // Dead zone protects near-centred stickers from tiny ROI drawing errors.
+  if(offsetX<=-.12)return "left";
+  if(offsetX>=.12)return "right";
+  return "center";
+}
+
+function rearSideMismatch(user,normal){
+  if(!user||!normal)return false;
+
+  if(user.side===normal.side)return false;
+
+  // Clear left ↔ right reversal: always mismatch.
+  if(
+    (user.side==="left"&&normal.side==="right")||
+    (user.side==="right"&&normal.side==="left")
+  ){
+    return true;
+  }
+
+  // Centre ↔ side is also treated as a mismatch when the actual horizontal
+  // displacement differs enough to be meaningful (28% of plate width).
+  return Math.abs(user.offsetX-normal.offsetX)>=.28;
+}
+
+function rearSideLabel(side){
+  return({
+    left:"왼쪽",
+    right:"오른쪽",
+    center:"중앙"
+  })[side]||"미확인";
 }
 
 function symmetricScaleDifferencePct(ratio){
