@@ -968,16 +968,16 @@ async function loadInspections(){
                         ? `후면 참고값(판정 제외): 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 ${Number(metrics.designSimilarity??0).toFixed(1)}% · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`
                         : `보정 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 동일성 ${Number(metrics.designSimilarity??0).toFixed(1)}% (기준 ${Number(metrics.designThreshold??0).toFixed(1)}%) · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`)}</span>
                   <span>${metrics.sideHint==="rear" && Number.isFinite(Number(metrics.rearGeometrySimilarity))
-                    ? `후면 위치: 좌우 ${metrics.rearSideMismatch===true
+                    ? `후면 기준 유사도 ${Number(metrics.rearGeometrySimilarity).toFixed(1)}% · 규격차이 ${Number(metrics.rearSizeDifference).toFixed(1)}% · 수평차이 ${Number(metrics.rearHorizontalDifference??0).toFixed(1)}% · 수직차이 ${Number(metrics.rearVerticalDifference??0).toFixed(1)}% · 좌우 ${metrics.rearSideMismatch===true
                         ? `불일치(정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)})`
-                        : "일치"} · 참고값: 기준유사도 ${Number(metrics.rearGeometrySimilarity).toFixed(1)}% / 규격차이 ${Number(metrics.rearSizeDifference).toFixed(1)}% / 수평차이 ${Number(metrics.rearHorizontalDifference??0).toFixed(1)}% / 수직차이 ${Number(metrics.rearVerticalDifference??0).toFixed(1)}%`
-                    : (Number.isFinite(Number(metrics.placementSimilarity))
+                        : "일치"}`
+                    : (metrics.placementSimilarity!==null &&
+                       metrics.placementSimilarity!==undefined &&
+                       Number.isFinite(Number(metrics.placementSimilarity))
                         ? `부착위치 유사도 ${Number(metrics.placementSimilarity).toFixed(1)}%`
                         : "부착위치 기준 미설정")}</span>
-                  ${metrics.sideHint==="rear"
-                    ? `<span>후면 판정신호: ${Array.isArray(metrics.rearDecisionSignals)&&metrics.rearDecisionSignals.length
-                        ? esc(metrics.rearDecisionSignals.join(", "))
-                        : "없음"}</span>`
+                  ${metrics.stickerRoiMode==="auto-from-plate"
+                    ? '<span>스티커 영역: 번호판 기준 자동탐색</span>'
                     : ""}
                   <span>${metrics.plateConfirmed===true
                     ? `번호판 확인 ✓ · 노출점수 ${Number(metrics.plateVisibilityScore??0).toFixed(1)}`
