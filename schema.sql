@@ -111,3 +111,24 @@ CREATE TABLE IF NOT EXISTS st_example_geometry (
   plate_height REAL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS st_example_vehicle (
+  example_id INTEGER PRIMARY KEY,
+  vehicle_type TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_st_example_vehicle_type
+ON st_example_vehicle(vehicle_type);
+
+
+CREATE TABLE IF NOT EXISTS st_rear_rules (
+  id INTEGER PRIMARY KEY CHECK (id=1),
+  rear_geometry_min REAL NOT NULL DEFAULT 62,
+  rear_size_difference_max REAL NOT NULL DEFAULT 18,
+  use_rear_geometry INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO st_rear_rules (
+  id,rear_geometry_min,rear_size_difference_max,use_rear_geometry
+) VALUES (1,62,18,1);
