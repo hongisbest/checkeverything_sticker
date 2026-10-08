@@ -297,14 +297,19 @@ async function loadExamples(){
           <div>
             <strong>예시사진 ${i+1}</strong>
             <div style="margin-top:5px">
-              ${Number(x.is_guide)===1?'<span class="pill active">촬영가이드 1번</span>':''}
+              ${x.vehicle_type?`<span class="pill active">${vehicleLabel(x.vehicle_type)}</span>`:'<span class="pill review">차종 미지정</span>'}
               ${x.calibrated?'<span class="pill normal">스티커영역 완료</span>':'<span class="pill review">스티커영역 필요</span>'}
               ${x.plate_calibrated?'<span class="pill normal">위치기준 완료</span>':'<span class="pill">번호판 미설정</span>'}
             </div>
+            <select class="example-vehicle-select" onchange="setExampleVehicle(${x.id},this.value)" style="margin-top:8px">
+              <option value="" ${!x.vehicle_type?"selected":""}>차종 선택</option>
+              <option value="k3" ${x.vehicle_type==="k3"?"selected":""}>K3</option>
+              <option value="avante" ${x.vehicle_type==="avante"?"selected":""}>아반떼</option>
+              <option value="ev3" ${x.vehicle_type==="ev3"?"selected":""}>EV3</option>
+            </select>
           </div>
           <div class="row-actions">
             <button class="btn small primary" onclick="openExampleRoi(${x.id})">영역설정</button>
-            <button class="btn small" onclick="setGuideExample(${x.id})" ${Number(x.is_guide)===1?"disabled":""}>가이드 지정</button>
             <button class="btn small danger" onclick="deleteExample(${x.id})">삭제</button>
           </div>
         </div>
@@ -313,7 +318,8 @@ async function loadExamples(){
 
     const calibrated=S.examples.filter(x=>x.calibrated).length;
     const placed=S.examples.filter(x=>x.calibrated&&x.plate_calibrated).length;
-    msg("examplesMessage",`예시 ${S.examples.length}장 · 스티커영역 ${calibrated}장 · 위치기준 ${placed}장`,"info");
+    const vehicleMapped=S.examples.filter(x=>x.vehicle_type).length;
+    msg("examplesMessage",`예시 ${S.examples.length}장 · 차종지정 ${vehicleMapped}장 · 스티커영역 ${calibrated}장 · 위치기준 ${placed}장`,"info");
   }catch(e){
     $("examplesList").innerHTML=`<div class="message error">${esc(e.message)}</div>`;
   }
@@ -332,6 +338,7 @@ async function addExamples(){
 
   try{
     const fd=new FormData();
+    fd.append("vehicle_type",$("addExampleVehicle").value);
 
     for(const file of files){
       const optimized=await compressImage(file,1800,.9);
@@ -355,6 +362,26 @@ async function addExamples(){
     $("addExamplesBtn").disabled=false;
   }
 }
+
+
+window.setExampleVehicle=async function(id,vehicleType){
+  try{
+    const r=await fetchTimeout(`/api/admin/examples/${id}/vehicle`,{
+      method:"PATCH",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({vehicle_type:vehicleType})
+    },12000);
+
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||"차종 저장 실패");
+
+    await loadExamples();
+    await loadStickers();
+  }catch(e){
+    alert(e.message);
+    await loadExamples();
+  }
+};
 
 window.setGuideExample=async function(id){
   try{
@@ -727,12 +754,15 @@ function defaultRules(){
     shape_similarity_min:72,
     design_similarity_min:82,
     placement_similarity_min:55,
+    rear_geometry_min:62,
+    rear_size_difference_max:18,
     color_difference_max:35,
     use_damage:1,
     use_shape:1,
     use_design:1,
     use_placement:1,
-    use_color:1
+    use_rear_geometry:1,
+    use_color:0
   };
 }
 
@@ -742,13 +772,16 @@ function fillRules(r){
   $("shapeSimilarityMin").value=Number(r.shape_similarity_min??72);
   $("designSimilarityMin").value=Number(r.design_similarity_min??82);
   $("placementSimilarityMin").value=Number(r.placement_similarity_min??55);
+  $("rearGeometryMin").value=Number(r.rear_geometry_min??62);
+  $("rearSizeDifferenceMax").value=Number(r.rear_size_difference_max??18);
   $("colorDifferenceMax").value=Number(r.color_difference_max??35);
 
   $("useDamage").checked=Number(r.use_damage??1)===1;
   $("useShape").checked=Number(r.use_shape??1)===1;
   $("useDesign").checked=Number(r.use_design??1)===1;
   $("usePlacement").checked=Number(r.use_placement??1)===1;
-  $("useColor").checked=Number(r.use_color??1)===1;
+  $("useRearGeometry").checked=Number(r.use_rear_geometry??1)===1;
+  $("useColor").checked=false;
 }
 
 function collectRules(){
@@ -758,12 +791,15 @@ function collectRules(){
     shape_similarity_min:Number($("shapeSimilarityMin").value),
     design_similarity_min:Number($("designSimilarityMin").value),
     placement_similarity_min:Number($("placementSimilarityMin").value),
+    rear_geometry_min:Number($("rearGeometryMin").value),
+    rear_size_difference_max:Number($("rearSizeDifferenceMax").value),
     color_difference_max:Number($("colorDifferenceMax").value),
     use_damage:$("useDamage").checked,
     use_shape:$("useShape").checked,
     use_design:$("useDesign").checked,
     use_placement:$("usePlacement").checked,
-    use_color:$("useColor").checked
+    use_rear_geometry:$("useRearGeometry").checked,
+    use_color:false
   };
 }
 
@@ -780,15 +816,15 @@ function updateRuleSummary(){
   }
 
   if(r.use_design){
-    parts.push(`디자인 동일성 정상예시 기반 자동기준 (예시 부족 시 ${r.design_similarity_min}% 사용)`);
+    parts.push(`디자인 동일성 차종별 정상예시 기준 (예시 미설정 시 ${r.design_similarity_min}% 사용)`);
   }
 
   if(r.use_placement){
-    parts.push(`부착위치 유사도 ${r.placement_similarity_min}% 미만 확인필요 (위치기준 설정 시)`);
+    parts.push(`측면 부착위치 유사도 ${r.placement_similarity_min}% 미만 확인필요`);
   }
 
-  if(r.use_color){
-    parts.push(`색상차이 ${r.color_difference_max} 초과 확인필요`);
+  if(r.use_rear_geometry){
+    parts.push(`후면 기준유사도 ${r.rear_geometry_min}% 미만 또는 크기차이 ${r.rear_size_difference_max}% 초과 확인필요`);
   }
 
   $("ruleSummary").innerHTML=parts.length
@@ -829,6 +865,8 @@ async function saveRules(){
     rules.shape_similarity_min,
     rules.design_similarity_min,
     rules.placement_similarity_min,
+    rules.rear_geometry_min,
+    rules.rear_size_difference_max,
     rules.color_difference_max
   ].every(Number.isFinite)){
     msg("rulesMessage","모든 숫자를 입력해 주세요.","error");
@@ -922,16 +960,22 @@ async function loadInspections(){
                 <div class="inspection-meta">
                   <strong>${esc(x.vehicle_no)} · ${esc(x.employee_name)}</strong>
                   <span>${esc(x.department||"-")} · ${esc(x.sticker_name||"-")} v${esc(x.sticker_version||"-")}</span>
+                  <span>차종 ${vehicleLabel(metrics.vehicleType||"")||"미기록"}</span>
                   <span>점수 ${Number(x.score).toFixed(1)} · <b>${esc(x.status)}</b></span>
                   <span>${x.status==="분석대기"
                     ? "자동분석 대기 중 · 사진과 선택영역은 저장 완료"
                     : `보정 손상 ${Number(metrics.damage??0).toFixed(1)}% · 구조 보존 ${Number(metrics.shape??0).toFixed(1)}% · 디자인 동일성 ${Number(metrics.designSimilarity??0).toFixed(1)}% (기준 ${Number(metrics.designThreshold??0).toFixed(1)}%) · 검출신뢰 ${Number(metrics.confidence??0).toFixed(1)}%`}</span>
-                  <span>${Number.isFinite(Number(metrics.placementSimilarity))
-                    ? `부착위치 유사도 ${Number(metrics.placementSimilarity).toFixed(1)}%`
-                    : "부착위치 기준 미설정"}</span>
+                  <span>${metrics.sideHint==="rear" && Number.isFinite(Number(metrics.rearGeometrySimilarity))
+                    ? `후면 기준 유사도 ${Number(metrics.rearGeometrySimilarity).toFixed(1)}% · 크기차이 ${Number(metrics.rearSizeDifference).toFixed(1)}%`
+                    : (Number.isFinite(Number(metrics.placementSimilarity))
+                        ? `부착위치 유사도 ${Number(metrics.placementSimilarity).toFixed(1)}%`
+                        : "부착위치 기준 미설정")}</span>
                   <span>${metrics.plateConfirmed===true
                     ? `번호판 확인 ✓ · 노출점수 ${Number(metrics.plateVisibilityScore??0).toFixed(1)}`
                     : "번호판 확인정보 없음"}</span>
+                  <span>${metrics.plateManualMatch===true
+                    ? `입력 차량번호 대조 ✓${metrics.plateOcrMatched===true ? " · 자동판독 일치" : " · 사용자 육안확인"}`
+                    : "입력 차량번호 대조정보 없음"}</span>
                   <span>${metrics.userAnalysisHidden===true
                     ? "직원 화면에는 자동판정 결과 미노출 · 관리자 전용 결과"
                     : "기존 점검결과"}</span>
@@ -1183,6 +1227,14 @@ function fetchTimeout(url,opts={},ms=20000){
       throw e;
     })
     .finally(()=>clearTimeout(timer));
+}
+
+function vehicleLabel(v){
+  return({
+    k3:"K3",
+    avante:"아반떼",
+    ev3:"EV3"
+  })[v]||"";
 }
 
 function sideLabel(v){
