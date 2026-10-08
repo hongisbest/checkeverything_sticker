@@ -45,6 +45,7 @@ function showRuntimeError(message){
 
 document.addEventListener("DOMContentLoaded",()=>{
   bind();
+  enableAutoStickerRoiUi();
   restoreProfile();
   loadConfig();
 });
@@ -62,9 +63,9 @@ function bind(){
   $("selectionStage").addEventListener("pointermove",moveSelect);
   window.addEventListener("pointerup",endSelect);
 
-  $("stickerModeBtn").onclick=()=>setSelectionMode("sticker");
+  // V24: 직원은 번호판만 지정합니다.
+  // 스티커 ROI는 동일 차종 정상예시 + 번호판 상대좌표를 이용해 자동 계산합니다.
   $("plateModeBtn").onclick=()=>setSelectionMode("plate");
-  $("resetStickerBtn").onclick=resetStickerSelection;
   $("resetPlateBtn").onclick=resetPlateSelection;
   $("stickerMissingCheck").onchange=toggleMissing;
   $("analyzeBtn").onclick=openSubmissionReview;
@@ -77,6 +78,40 @@ function bind(){
   ["employeeName","employeeId","department","vehicleNo"].forEach(id=>{
     $(id).addEventListener("input",saveProfile);
   });
+}
+
+function enableAutoStickerRoiUi(){
+  const stickerBtn=$("stickerModeBtn");
+  const resetStickerBtn=$("resetStickerBtn");
+
+  if(stickerBtn)stickerBtn.style.display="none";
+  if(resetStickerBtn)resetStickerBtn.style.display="none";
+
+  if($("plateModeBtn")){
+    $("plateModeBtn").textContent="번호판 영역 지정";
+    $("plateModeBtn").classList.add("primary");
+  }
+
+  if($("stickerSelectionState")){
+    $("stickerSelectionState").textContent="스티커 자동탐색";
+    $("stickerSelectionState").className="pill";
+  }
+
+  const info=document.querySelector("#selectionSection .message.info");
+  if(info){
+    info.innerHTML=
+      "사진에서 <b>차량번호판만 지정</b>해 주세요. "+
+      "홍보스티커는 선택한 차종의 정상 예시사진을 기준으로 자동 탐색합니다. "+
+      "직원이 스티커 영역을 직접 지정할 필요가 없습니다.";
+  }
+
+  const title=document.querySelector("#selectionSection .section-head h2");
+  if(title)title.textContent="번호판 영역 확인";
+
+  if($("requiredAreaMessage")){
+    $("requiredAreaMessage").textContent=
+      "번호판을 지정하면 스티커 예상영역이 자동으로 표시됩니다.";
+  }
 }
 
 async function loadConfig(){
@@ -348,12 +383,12 @@ async function preparePhoto(blob){
   $("plateSelectionBox").classList.add("hidden");
   $("draftSelectionBox").classList.add("hidden");
 
-  $("stickerSelectionState").textContent="스티커 미지정";
-  $("stickerSelectionState").className="pill review";
+  $("stickerSelectionState").textContent="스티커 자동탐색 대기";
+  $("stickerSelectionState").className="pill";
   $("plateSelectionState").textContent="번호판 미지정";
   $("plateSelectionState").className="pill review";
 
-  setSelectionMode("sticker");
+  setSelectionMode("plate");
   updateRequiredAreaState();
 
   $("selectionSection").scrollIntoView({behavior:"smooth"});
@@ -370,9 +405,8 @@ function point(e){
 function setSelectionMode(mode){
   if(!["sticker","plate"].includes(mode))return;
 
-  if(mode==="sticker"&&$("stickerMissingCheck").checked){
-    mode="plate";
-  }
+  // V24: 수동 스티커 선택모드는 사용하지 않습니다.
+  mode="plate";
 
   S.selectionMode=mode;
   S.draftSelection=null;
@@ -381,9 +415,7 @@ function setSelectionMode(mode){
   $("stickerModeBtn").classList.toggle("primary",mode==="sticker");
   $("plateModeBtn").classList.toggle("primary",mode==="plate");
 
-  $("selectionStatus").textContent=mode==="sticker"
-    ? "스티커 선택"
-    : "번호판 선택";
+  $("selectionStatus").textContent="번호판 선택";
 }
 
 function startSelect(e){
@@ -428,36 +460,132 @@ function endSelect(){
     return;
   }
 
-  if(S.selectionMode==="sticker"){
-    S.selection={...S.draftSelection};
-    renderBox($("stickerSelectionBox"),S.selection);
-    $("stickerSelectionBox").classList.remove("hidden");
-    $("stickerSelectionState").textContent="스티커 지정완료";
-    $("stickerSelectionState").className="pill normal";
+  S.plateSelection={...S.draftSelection};
+  S.plateVisibility=analyzePlateVisibility(S.photoImage,S.plateSelection);
+  S.plateMatchConfirmed=false;
+  S.plateOcrResult=null;
+  if($("plateMatchConfirm"))$("plateMatchConfirm").checked=false;
 
-    setSelectionMode("plate");
-  }else{
-    S.plateSelection={...S.draftSelection};
-    S.plateVisibility=analyzePlateVisibility(S.photoImage,S.plateSelection);
-    S.plateMatchConfirmed=false;
-    S.plateOcrResult=null;
-    if($("plateMatchConfirm"))$("plateMatchConfirm").checked=false;
+  renderBox($("plateSelectionBox"),S.plateSelection);
+  $("plateSelectionBox").classList.remove("hidden");
 
-    renderBox($("plateSelectionBox"),S.plateSelection);
-    $("plateSelectionBox").classList.remove("hidden");
+  $("plateSelectionState").textContent=S.plateVisibility.score>=22
+    ? "번호판 확인완료"
+    : "번호판 재확인 권장";
 
-    $("plateSelectionState").textContent=S.plateVisibility.score>=22
-      ? "번호판 확인완료"
-      : "번호판 재확인 권장";
+  $("plateSelectionState").className=S.plateVisibility.score>=22
+    ? "pill normal"
+    : "pill review";
 
-    $("plateSelectionState").className=S.plateVisibility.score>=22
-      ? "pill normal"
-      : "pill review";
-  }
+  updateAutoStickerSelection();
 
   S.draftSelection=null;
   $("draftSelectionBox").classList.add("hidden");
   updateRequiredAreaState();
+}
+
+function getVehiclePlacementExample(sticker=S.sticker,vehicleType=S.vehicleType){
+  if(!sticker||!vehicleType)return null;
+
+  return (sticker.examples||[]).find(x=>
+    x.vehicle_type===vehicleType &&
+    x.calibrated &&
+    x.plate_calibrated
+  ) || null;
+}
+
+function deriveStickerBoxFromPlate(example,plate){
+  if(!example||!plate)return null;
+
+  const ep={
+    x:Number(example.plate_x),
+    y:Number(example.plate_y),
+    width:Number(example.plate_width),
+    height:Number(example.plate_height)
+  };
+
+  const es={
+    x:Number(example.crop_x),
+    y:Number(example.crop_y),
+    width:Number(example.crop_width),
+    height:Number(example.crop_height)
+  };
+
+  if(
+    !Number.isFinite(ep.width)||!Number.isFinite(ep.height)||
+    !Number.isFinite(es.width)||!Number.isFinite(es.height)||
+    ep.width<=.005||ep.height<=.005||
+    es.width<=.005||es.height<=.005
+  )return null;
+
+  const epcx=ep.x+ep.width/2;
+  const epcy=ep.y+ep.height/2;
+  const escx=es.x+es.width/2;
+  const escy=es.y+es.height/2;
+
+  const widthRatio=es.width/ep.width;
+  const heightRatio=es.height/ep.height;
+  const offsetX=(escx-epcx)/ep.width;
+  const offsetY=(escy-epcy)/ep.height;
+
+  const pcx=plate.x+plate.width/2;
+  const pcy=plate.y+plate.height/2;
+
+  const width=plate.width*widthRatio;
+  const height=plate.height*heightRatio;
+  const scx=pcx+offsetX*plate.width;
+  const scy=pcy+offsetY*plate.height;
+
+  return clampBox({
+    x:scx-width/2,
+    y:scy-height/2,
+    width,
+    height
+  });
+}
+
+function updateAutoStickerSelection(){
+  if($("stickerMissingCheck").checked){
+    S.selection=null;
+    $("stickerSelectionBox").classList.add("hidden");
+    $("stickerSelectionState").textContent="스티커 없음";
+    $("stickerSelectionState").className="pill normal";
+    return;
+  }
+
+  if(!S.plateSelection){
+    S.selection=null;
+    $("stickerSelectionBox").classList.add("hidden");
+    $("stickerSelectionState").textContent="스티커 자동탐색 대기";
+    $("stickerSelectionState").className="pill";
+    return;
+  }
+
+  const example=getVehiclePlacementExample();
+
+  if(!example){
+    S.selection=null;
+    $("stickerSelectionBox").classList.add("hidden");
+    $("stickerSelectionState").textContent="자동기준 미설정";
+    $("stickerSelectionState").className="pill review";
+    return;
+  }
+
+  const predicted=deriveStickerBoxFromPlate(example,S.plateSelection);
+
+  if(!predicted){
+    S.selection=null;
+    $("stickerSelectionBox").classList.add("hidden");
+    $("stickerSelectionState").textContent="자동계산 실패";
+    $("stickerSelectionState").className="pill review";
+    return;
+  }
+
+  S.selection=predicted;
+  renderBox($("stickerSelectionBox"),S.selection);
+  $("stickerSelectionBox").classList.remove("hidden");
+  $("stickerSelectionState").textContent="스티커 예상영역";
+  $("stickerSelectionState").className="pill normal";
 }
 
 function renderBox(el,s){
@@ -472,21 +600,7 @@ function renderBox(el,s){
 }
 
 function resetStickerSelection(){
-  S.selection=null;
-  S.analyzedSelection=null;
-
-  $("stickerSelectionBox").classList.add("hidden");
-  $("stickerSelectionState").textContent=$("stickerMissingCheck").checked
-    ? "스티커 없음"
-    : "스티커 미지정";
-  $("stickerSelectionState").className=$("stickerMissingCheck").checked
-    ? "pill normal"
-    : "pill review";
-
-  if(!$("stickerMissingCheck").checked){
-    setSelectionMode("sticker");
-  }
-
+  updateAutoStickerSelection();
   updateRequiredAreaState();
 }
 
@@ -495,9 +609,13 @@ function resetPlateSelection(){
   S.plateVisibility=null;
   S.plateMatchConfirmed=false;
   S.plateOcrResult=null;
+  S.selection=null;
 
   if($("plateMatchConfirm"))$("plateMatchConfirm").checked=false;
   $("plateSelectionBox").classList.add("hidden");
+  $("stickerSelectionBox").classList.add("hidden");
+  $("stickerSelectionState").textContent="스티커 자동탐색 대기";
+  $("stickerSelectionState").className="pill";
   $("plateSelectionState").textContent="번호판 미지정";
   $("plateSelectionState").className="pill review";
 
@@ -509,49 +627,43 @@ function toggleMissing(){
   if($("stickerMissingCheck").checked){
     S.selection=null;
     S.analyzedSelection=null;
-
     $("stickerSelectionBox").classList.add("hidden");
     $("stickerSelectionState").textContent="스티커 없음";
     $("stickerSelectionState").className="pill normal";
-
-    setSelectionMode("plate");
   }else{
-    $("stickerSelectionState").textContent=S.selection
-      ? "스티커 지정완료"
-      : "스티커 미지정";
-    $("stickerSelectionState").className=S.selection
-      ? "pill normal"
-      : "pill review";
-
-    if(!S.selection)setSelectionMode("sticker");
+    updateAutoStickerSelection();
   }
 
+  setSelectionMode("plate");
   updateRequiredAreaState();
 }
 
 function updateRequiredAreaState(){
-  const stickerOk=$("stickerMissingCheck").checked||!!S.selection;
+  const missing=$("stickerMissingCheck").checked;
   const plateOk=!!S.plateSelection;
+  const autoStickerOk=missing||!!S.selection;
 
-  $("analyzeBtn").disabled=!(stickerOk&&plateOk);
+  $("analyzeBtn").disabled=!(plateOk&&autoStickerOk);
 
-  if(stickerOk&&plateOk){
+  if(plateOk&&autoStickerOk){
     const weakPlate=S.plateVisibility&&S.plateVisibility.score<22;
 
-    $("selectionStatus").textContent="필수영역 확인완료";
+    $("selectionStatus").textContent="번호판 확인완료";
     $("requiredAreaMessage").className=`message ${weakPlate?"warn":"success"}`;
-    $("requiredAreaMessage").textContent=weakPlate
-      ? "두 영역은 지정됐지만 번호판 영역이 작거나 흐릴 수 있습니다. 번호판이 실제로 읽을 수 있을 정도로 보이는지 확인한 뒤 분석하세요."
-      : "스티커와 번호판이 모두 확인되었습니다. 스티커 부착상태를 분석할 수 있습니다.";
-  }else{
-    const missing=[];
-
-    if(!stickerOk)missing.push("스티커");
-    if(!plateOk)missing.push("번호판");
-
-    $("selectionStatus").textContent=`${missing.join(" · ")} 확인 필요`;
+    $("requiredAreaMessage").textContent=missing
+      ? "번호판이 확인되었습니다. 스티커 없음 상태로 제출할 수 있습니다."
+      : (weakPlate
+          ? "번호판 영역이 작거나 흐릴 수 있습니다. 번호판을 읽을 수 있는지 확인해 주세요. 스티커 예상영역은 자동 계산되었습니다."
+          : "번호판 확인완료. 스티커는 정상 예시 기준으로 자동 탐색합니다.");
+  }else if(!plateOk){
+    $("selectionStatus").textContent="번호판 확인 필요";
     $("requiredAreaMessage").className="message warn";
-    $("requiredAreaMessage").textContent=`${missing.join("와 ")} 영역을 지정해 주세요.`;
+    $("requiredAreaMessage").textContent="차량번호판 영역만 지정해 주세요.";
+  }else{
+    $("selectionStatus").textContent="자동기준 확인 필요";
+    $("requiredAreaMessage").className="message error";
+    $("requiredAreaMessage").textContent=
+      "선택한 차종의 정상 예시에 스티커 영역과 번호판 영역이 모두 설정되어 있어야 자동분석할 수 있습니다.";
   }
 }
 
@@ -748,7 +860,7 @@ function openSubmissionReview(){
     }
 
     if(!missing&&!S.selection){
-      throw new Error("스티커 영역을 먼저 지정해 주세요.");
+      throw new Error("스티커 자동영역을 계산하지 못했습니다. 관리자 정상예시의 스티커/번호판 영역 설정을 확인해 주세요.");
     }
 
     renderSubmissionReview();
@@ -784,9 +896,11 @@ function renderSubmissionReview(){
   }else{
     const stickerQuality=analyzeRegionVisibility(S.photoImage,S.selection,"sticker");
     renderReviewCrop("reviewStickerCrop",S.selection,"홍보스티커");
-    $("reviewStickerState").textContent="영역 확인완료";
+    $("reviewStickerState").textContent="자동 예상영역";
     $("reviewStickerState").className="pill normal";
-    renderQualityMessage("reviewStickerQuality",stickerQuality,"스티커");
+    $("reviewStickerQuality").className="message info";
+    $("reviewStickerQuality").textContent=
+      "직접 지정한 영역이 아닙니다. 번호판과 동일 차종 정상 예시를 기준으로 계산한 예상영역이며, 제출 후 주변을 자동 탐색합니다.";
   }
 
   const plateQuality=analyzeRegionVisibility(S.photoImage,S.plateSelection,"plate");
@@ -1299,6 +1413,70 @@ function stabilizeSelection(s,photoW,photoH,referenceAspect){
   };
 }
 
+function compareNormalizedStructureFast(masterDescriptor,imageOrCanvas){
+  const canvas=imageOrCanvas instanceof HTMLCanvasElement
+    ? fitCanvasToSize(imageOrCanvas,masterDescriptor.W,masterDescriptor.H)
+    : fitImageCanvas(imageOrCanvas,masterDescriptor.W,masterDescriptor.H);
+
+  const hog=hogGridFromCanvas(
+    canvas,
+    masterDescriptor.CELL,
+    masterDescriptor.BINS
+  );
+
+  const result=hogSimilarity(
+    masterDescriptor.hog,
+    hog,
+    masterDescriptor.informative
+  );
+
+  return{
+    sims:Array.from(result.sims),
+    global:result.weightedMean,
+    canvas,
+    hogHistograms:hog.histograms.map(h=>Array.from(h)),
+    edgeSignature:edgeProjectionSignature(canvas)
+  };
+}
+
+function autoStickerSearchVariants(base,plate,sideHint){
+  const boxes=[];
+
+  const scales=[.78,.90,1,1.12,1.26];
+  const xShifts=[-1.25,-.70,0,.70,1.25];
+  const yShifts=[-.75,0,.75];
+
+  for(const scale of scales){
+    for(const dx of xShifts){
+      for(const dy of yShifts){
+        boxes.push(scaleBox(base,scale,dx,dy));
+      }
+    }
+  }
+
+  // 후면 반대편 부착도 자동으로 찾아야 위치 미준수를 잡을 수 있다.
+  if(sideHint==="rear"&&plate){
+    const pcx=plate.x+plate.width/2;
+    const bcx=base.x+base.width/2;
+    const mirroredCenterX=pcx-(bcx-pcx);
+
+    const mirrored=clampBox({
+      x:mirroredCenterX-base.width/2,
+      y:base.y,
+      width:base.width,
+      height:base.height
+    });
+
+    for(const scale of [.85,1,1.15]){
+      for(const dx of [-.45,0,.45]){
+        boxes.push(scaleBox(mirrored,scale,dx,0));
+      }
+    }
+  }
+
+  return uniqueBoxes(boxes);
+}
+
 function selectionSearchVariants(base){
   return uniqueBoxes([
     scaleBox(base,.94,0,0),
@@ -1741,7 +1919,7 @@ async function submitInspection(event){
 
     if(!missing&&!S.selection){
       throw new UserSubmitError(
-        "스티커 영역이 지정되지 않았습니다. STEP 04에서 홍보스티커를 다시 지정해 주세요.",
+        "스티커 자동영역을 계산하지 못했습니다. 관리자 정상예시의 스티커/번호판 영역 설정을 확인해 주세요.",
         "selection"
       );
     }
@@ -2111,7 +2289,7 @@ function resetAfterSuccessfulSubmit(){
   S.analyzedSelection=null;
   S.analysis=null;
   S.photoHash=null;
-  S.selectionMode="sticker";
+  S.selectionMode="plate";
 
   $("selectionSection").classList.add("hidden");
   $("submissionSection").classList.add("hidden");
@@ -2184,7 +2362,9 @@ async function runBackgroundAdminAnalysis(id,token,snapshot){
     plateVisibilityScore:Number(snapshot.plateQuality?.score||0),
     plateCaptureQuality:snapshot.plateQuality,
     plateCrop:snapshot.plateSelection,
-    userStickerCrop:snapshot.selection
+    userStickerCrop:snapshot.selection,
+    stickerRoiMode:"auto-from-plate",
+    detectedStickerCrop:analysis.metrics?.detectedStickerCrop||null
   };
 
   const r=await fetchTimeout(`/api/inspection/${id}/analysis`,{
@@ -2289,17 +2469,42 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     masterDescriptor.W/masterDescriptor.H
   );
 
-  const candidates=selectionSearchVariants(base);
-  let best=null;
+  const candidates=autoStickerSearchVariants(
+    base,
+    snapshot.plateSelection,
+    snapshot.sticker.side_hint
+  );
+
+  // 1차: 싼 HOG 비교로 넓은 후보영역을 빠르게 탐색
+  const coarse=[];
 
   for(let i=0;i<candidates.length;i++){
     const box=candidates[i];
-    const canvas=cropBoxCanvas(snapshot.photoImage,box,1000);
+    const canvas=cropBoxCanvas(snapshot.photoImage,box,900);
+    const cmp=compareNormalizedStructureFast(masterDescriptor,canvas);
+    const nearest=findNearestNormalExample(cmp,normalRecords,masterDescriptor,calibration);
+
+    coarse.push({
+      box,
+      coarseScore:nearest?.matchScore||0
+    });
+
+    if(i%8===0)await yieldToBrowser();
+  }
+
+  coarse.sort((a,b)=>b.coarseScore-a.coarseScore);
+
+  // 2차: 상위 후보만 기존 정밀 정렬 비교
+  const finalists=coarse.slice(0,4);
+  let best=null;
+
+  for(const item of finalists){
+    const canvas=cropBoxCanvas(snapshot.photoImage,item.box,1000);
     const cmp=await compareNormalizedStructureResponsive(masterDescriptor,canvas);
     const nearest=findNearestNormalExample(cmp,normalRecords,masterDescriptor,calibration);
 
     if(!best||nearest.matchScore>best.nearest.matchScore){
-      best={box,cmp,nearest};
+      best={box:item.box,cmp,nearest};
     }
 
     await yieldToBrowser();
@@ -2332,9 +2537,15 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
   );
 
   const confidence=r1(clamp(best.nearest.matchScore*100,0,100));
-  const placement=placementSimilarityScore(snapshot,normalRecords);
+
+  const detectedSnapshot={
+    ...snapshot,
+    selection:best.box
+  };
+
+  const placement=placementSimilarityScore(detectedSnapshot,normalRecords);
   const rearGeometry=snapshot.sticker.side_hint==="rear"
-    ? rearGeometryComparison(snapshot,normalRecords)
+    ? rearGeometryComparison(detectedSnapshot,normalRecords)
     : null;
 
   const designCalibration=calibrateNormalDesignRange(
@@ -2366,8 +2577,9 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     rearSideMismatch:rearGeometry?.sideMismatch===true,
     rearUserSide:rearGeometry?.userSide||null,
     rearNormalSide:rearGeometry?.normalSide||null,
-    rearDecisionMode:"rear-consensus-v23",
-    rearDecisionSignals:[],
+    stickerRoiMode:"auto-from-plate",
+    autoExpectedStickerCrop:snapshot.selection,
+    detectedStickerCrop:best.box,
     color:null,
     confidence,
     vehicleType:snapshot.vehicleType,
@@ -2400,99 +2612,89 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
   }
 
   if(isRear){
-    // V23 rear policy:
-    // Perspective can heavily distort the plate/sticker size ratio.
-    // Therefore size/geometry alone are diagnostic values, not automatic failure.
-    // Rear auto-fail is reserved for:
-    //   1) opposite-side placement,
-    //   2) strongly different design corroborated by size/geometry difference.
+    // 후면은 손상률/HOG 구조보존을 판정조건에서 제외한다.
+    // 정상 샘플에서 야간조명·후미등 반사·촬영각도만으로 오탐이 발생했기 때문이다.
+    // 후면 주판정: 존재여부(상위 단계) + 좌우 + 번호판 대비 규격 + 상대위치.
     if(!Number.isFinite(metrics.rearGeometrySimilarity)){
       status="판정불가";
       findings.push(
-        "후면 정상 예시의 번호판 기준영역이 없어 부착위치 판정을 수행하지 못했습니다."
+        "후면 정상 예시의 번호판 기준영역이 없어 크기·부착위치 판정을 수행하지 못했습니다."
       );
     }else{
-      const signals=[];
-
-      if(metrics.rearSideMismatch===true){
-        signals.push("opposite-side");
-        status="확인필요";
-        findings.push(
-          `후면 좌우 부착위치 불일치 → 정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)}`
-        );
-      }
-
-      const designWeak=
-        Number.isFinite(metrics.designSimilarity) &&
-        metrics.designSimilarity<58;
-
-      const sizeWeak=
-        Number.isFinite(metrics.rearSizeDifference) &&
-        metrics.rearSizeDifference>25;
-
-      const geometryWeak=
-        Number.isFinite(metrics.rearGeometrySimilarity) &&
-        metrics.rearGeometrySimilarity<48;
-
-      const horizontalWeak=
-        Number.isFinite(metrics.rearHorizontalDifference) &&
-        metrics.rearHorizontalDifference>55;
-
-      const verticalWeak=
-        Number.isFinite(metrics.rearVerticalDifference) &&
-        metrics.rearVerticalDifference>85;
-
-      if(designWeak)signals.push("design");
-      if(sizeWeak)signals.push("size");
-      if(geometryWeak)signals.push("geometry");
-      if(horizontalWeak)signals.push("horizontal");
-      if(verticalWeak)signals.push("vertical");
-
-      // Previous fabricated sample:
-      // design is different AND its apparent size/placement differs.
-      // A single noisy metric caused by close/oblique shooting is not enough.
-      const fabricatedEvidence=
-        designWeak &&
-        (sizeWeak||geometryWeak||horizontalWeak||verticalWeak);
-
-      if(fabricatedEvidence){
-        status="확인필요";
-        findings.push(
-          `후면 임의제작 의심 → 디자인 ${metrics.designSimilarity}% + `+
-          `규격/위치 보조신호가 함께 확인됨`
-        );
-      }
-
-      // Extremely different artwork can still be caught even when geometry is
-      // unavailable or looks deceptively similar.
-      if(Number.isFinite(metrics.designSimilarity) &&
-         metrics.designSimilarity<40){
-        status="확인필요";
-        if(!findings.some(x=>x.includes("임의제작"))){
+      if(Number(rules.use_rear_geometry ?? 1)===1){
+        if(metrics.rearSideMismatch===true){
+          status="확인필요";
           findings.push(
-            `후면 디자인 동일성 ${metrics.designSimilarity}% → 정상 원본과 형상이 크게 달라 임의제작 여부 확인필요`
+            `후면 좌우 부착위치 불일치 → 정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)}`
+          );
+        }
+
+        if(metrics.rearSizeDifference>Number(rules.rear_size_difference_max ?? 18)){
+          status="확인필요";
+          findings.push(
+            `후면 스티커 규격 차이 ${metrics.rearSizeDifference}% → 정상 예시 대비 크기가 달라 임의제작·규격상이 여부 확인필요`
+          );
+        }
+
+        if(Number.isFinite(metrics.rearHorizontalDifference) &&
+           metrics.rearHorizontalDifference>42){
+          status="확인필요";
+          findings.push(
+            `후면 수평 위치차이 ${metrics.rearHorizontalDifference}% → 번호판 대비 좌우 위치 확인필요`
+          );
+        }
+
+        if(Number.isFinite(metrics.rearVerticalDifference) &&
+           metrics.rearVerticalDifference>65){
+          status="확인필요";
+          findings.push(
+            `후면 수직 위치차이 ${metrics.rearVerticalDifference}% → 번호판 대비 상하 위치 확인필요`
+          );
+        }
+
+        if(metrics.rearGeometrySimilarity<Number(rules.rear_geometry_min ?? 62)){
+          status="확인필요";
+          findings.push(
+            `후면 기준 유사도 ${metrics.rearGeometrySimilarity}% → 같은 차종 정상 예시 대비 크기·상대위치 확인필요`
           );
         }
       }
 
-      metrics.rearDecisionSignals=signals;
-
-      if(status==="정상"&&!findings.length){
+      // 정상 샘플은 야간/각도 차이로 디자인 점수가 60%대까지 내려갈 수 있어
+      // 후면에서는 매우 큰 형상 불일치만 보조적으로 임의제작 의심 처리한다.
+      const rearDesignFloor=50;
+      if(Number(rules.use_design ?? 1)===1 &&
+         metrics.designSimilarity<rearDesignFloor){
+        status="확인필요";
         findings.push(
-          `${vehicleLabel(snapshot.vehicleType)} 후면 기준: 좌우 부착위치 정상. `+
-          `규격·상대위치는 촬영각도 영향이 커 참고값으로만 사용하며, `+
-          `임의제작은 디자인과 규격/위치가 함께 다를 때 확인필요로 판정합니다.`
+          `후면 디자인 동일성 ${metrics.designSimilarity}% → 정상 원본과 형상이 크게 달라 임의제작 여부 확인필요`
         );
       }
     }
+
+    if(status==="정상"&&!findings.length){
+      findings.push(
+        `${vehicleLabel(snapshot.vehicleType)} 후면 정상 예시 대비 스티커 존재·좌우·규격·상대위치가 정상 범위입니다.`
+      );
+    }
   }else if(status!=="판정불가"){
-    // 측면은 기존 판정 로직 유지
+    // 측면에서 정상 예시와 직접 유사도가 높고 디자인도 통과하면,
+    // ROI/조명 오차로 손상·구조가 기준을 소폭 벗어난 것만으로는 확인필요 처리하지 않는다.
+    const nearNormalExample=
+      metrics.nearestExampleSimilarity>=72 &&
+      metrics.designSimilarity>=metrics.designThreshold &&
+      metrics.damage<18 &&
+      metrics.shape>=65;
+
     if(Number(rules.use_damage)===1){
       if(metrics.damage>=Number(rules.damage_replace_min)){
         status="확인필요";
         recommendation="교체 권고";
         findings.push(`보정 구조손상 ${metrics.damage}% → 교체 권고`);
-      }else if(metrics.damage>Number(rules.damage_normal_max)){
+      }else if(
+        metrics.damage>Number(rules.damage_normal_max) &&
+        !nearNormalExample
+      ){
         status="확인필요";
         findings.push(`보정 구조손상 ${metrics.damage}% → 손상 여부 확인필요`);
       }
@@ -2507,7 +2709,9 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     }
 
     if(Number(rules.use_placement ?? 1)===1 &&
-       Number.isFinite(metrics.placementSimilarity) &&
+       metrics.placementSimilarity!==null &&
+       metrics.placementSimilarity!==undefined &&
+       Number.isFinite(Number(metrics.placementSimilarity)) &&
        metrics.placementSimilarity<Number(rules.placement_similarity_min ?? 55)){
       status="확인필요";
       findings.push(
@@ -2515,7 +2719,11 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
       );
     }
 
-    if(Number(rules.use_shape)===1&&metrics.shape<Number(rules.shape_similarity_min)){
+    if(
+      Number(rules.use_shape)===1 &&
+      metrics.shape<Number(rules.shape_similarity_min) &&
+      !nearNormalExample
+    ){
       status="확인필요";
       findings.push(`구조 보존율 ${metrics.shape}% → 로고·문구·그래픽 구조 확인필요`);
     }
