@@ -122,14 +122,24 @@ function ensureSchema(env) {
       env.DB.prepare(`INSERT OR IGNORE INTO st_rule_extensions(
         id,design_similarity_min,placement_similarity_min,use_design,use_placement
       ) VALUES(1,82,55,1,1)`),
-      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_example_geometry (
-        example_id INTEGER PRIMARY KEY,
-        plate_x REAL,
-        plate_y REAL,
-        plate_width REAL,
-        plate_height REAL,
-        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-      )`)
+env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_example_geometry (
+  example_id INTEGER PRIMARY KEY,
+  plate_x REAL,
+  plate_y REAL,
+  plate_width REAL,
+  plate_height REAL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`),
+
+env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_example_vehicle (
+  example_id INTEGER PRIMARY KEY,
+  vehicle_type TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`),
+
+env.DB.prepare(
+  "CREATE INDEX IF NOT EXISTS idx_st_example_vehicle_type ON st_example_vehicle(vehicle_type)"
+)
     ]).catch(e => {
       schemaPromise = null;
       throw e;
