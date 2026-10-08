@@ -122,24 +122,30 @@ function ensureSchema(env) {
       env.DB.prepare(`INSERT OR IGNORE INTO st_rule_extensions(
         id,design_similarity_min,placement_similarity_min,use_design,use_placement
       ) VALUES(1,82,55,1,1)`),
-env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_example_geometry (
-  example_id INTEGER PRIMARY KEY,
-  plate_x REAL,
-  plate_y REAL,
-  plate_width REAL,
-  plate_height REAL,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-)`),
-
-env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_example_vehicle (
-  example_id INTEGER PRIMARY KEY,
-  vehicle_type TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-)`),
-
-env.DB.prepare(
-  "CREATE INDEX IF NOT EXISTS idx_st_example_vehicle_type ON st_example_vehicle(vehicle_type)"
-)
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_example_geometry (
+        example_id INTEGER PRIMARY KEY,
+        plate_x REAL,
+        plate_y REAL,
+        plate_width REAL,
+        plate_height REAL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_example_vehicle (
+        example_id INTEGER PRIMARY KEY,
+        vehicle_type TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`),
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_example_vehicle_type ON st_example_vehicle(vehicle_type)"),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_rear_rules (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        rear_geometry_min REAL NOT NULL DEFAULT 62,
+        rear_size_difference_max REAL NOT NULL DEFAULT 18,
+        use_rear_geometry INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`),
+      env.DB.prepare(`INSERT OR IGNORE INTO st_rear_rules(
+        id,rear_geometry_min,rear_size_difference_max,use_rear_geometry
+      ) VALUES(1,62,18,1)`)
     ]).catch(e => {
       schemaPromise = null;
       throw e;
@@ -198,21 +204,13 @@ async function api(request, env, url) {
   if (stickerExamples && request.method === "GET") return listExamples(env, Number(stickerExamples[1]));
   if (stickerExamples && request.method === "POST") return addExamples(request, env, Number(stickerExamples[1]));
 
-const exampleRoi = p.match(/^\/api\/admin\/examples\/(\d+)\/roi$/);
-if (exampleRoi && request.method === "PATCH") {
-  return updateExampleRoi(request, env, Number(exampleRoi[1]));
-}
+  const exampleRoi = p.match(/^\/api\/admin\/examples\/(\d+)\/roi$/);
+  if (exampleRoi && request.method === "PATCH") return updateExampleRoi(request, env, Number(exampleRoi[1]));
 
-const exampleVehicle = p.match(/^\/api\/admin\/examples\/(\d+)\/vehicle$/);
-if (exampleVehicle && request.method === "PATCH") {
-  return updateExampleVehicle(
-    request,
-    env,
-    Number(exampleVehicle[1])
-  );
-}
+  const exampleVehicle = p.match(/^\/api\/admin\/examples\/(\d+)\/vehicle$/);
+  if (exampleVehicle && request.method === "PATCH") return updateExampleVehicle(request, env, Number(exampleVehicle[1]));
 
-const exampleGuide = p.match(/^\/api\/admin\/examples\/(\d+)\/guide$/);
+  const exampleGuide = p.match(/^\/api\/admin\/examples\/(\d+)\/guide$/);
   if (exampleGuide && request.method === "POST") return setGuideExample(env, Number(exampleGuide[1]));
 
   const exampleDelete = p.match(/^\/api\/admin\/examples\/(\d+)$/);
@@ -308,13 +306,22 @@ async function readRules(env) {
     FROM st_rule_extensions WHERE id=1
   `).first();
 
+  const rear=await env.DB.prepare(`
+    SELECT rear_geometry_min,rear_size_difference_max,
+           use_rear_geometry,updated_at
+    FROM st_rear_rules WHERE id=1
+  `).first();
+
   return{
     ...(base||{}),
     design_similarity_min:Number(extra?.design_similarity_min ?? 82),
     placement_similarity_min:Number(extra?.placement_similarity_min ?? 55),
     use_design:Number(extra?.use_design ?? 1),
     use_placement:Number(extra?.use_placement ?? 1),
-    updated_at:extra?.updated_at || base?.updated_at || null
+    rear_geometry_min:Number(rear?.rear_geometry_min ?? 62),
+    rear_size_difference_max:Number(rear?.rear_size_difference_max ?? 18),
+    use_rear_geometry:Number(rear?.use_rear_geometry ?? 1),
+    updated_at:rear?.updated_at || extra?.updated_at || base?.updated_at || null
   };
 }
 
@@ -330,15 +337,15 @@ async function getConfig(env) {
 
   for (const r of rows.results || []) {
     const examples = await env.DB.prepare(`
-SELECT e.id,e.sort_order,e.crop_x,e.crop_y,e.crop_width,e.crop_height,
-       e.is_guide,e.created_at,e.updated_at,
-       g.plate_x,g.plate_y,g.plate_width,g.plate_height,
-       v.vehicle_type
-FROM st_examples e
-LEFT JOIN st_example_geometry g ON g.example_id=e.id
-LEFT JOIN st_example_vehicle v ON v.example_id=e.id
-WHERE e.sticker_id=?
-      ORDER BY e.is_guide DESC,e.sort_order ASC,e.id ASC
+      SELECT e.id,e.sort_order,e.crop_x,e.crop_y,e.crop_width,e.crop_height,
+             e.is_guide,e.created_at,e.updated_at,
+             g.plate_x,g.plate_y,g.plate_width,g.plate_height,
+             v.vehicle_type
+      FROM st_examples e
+      LEFT JOIN st_example_geometry g ON g.example_id=e.id
+      LEFT JOIN st_example_vehicle v ON v.example_id=e.id
+      WHERE e.sticker_id=?
+      ORDER BY e.sort_order ASC,e.id ASC
     `).bind(r.id).all();
 
     const ex=(examples.results || []).map(x=>({
@@ -352,15 +359,13 @@ WHERE e.sticker_id=?
         x.plate_width!==null && x.plate_height!==null
     }));
 
-    const guide = ex.find(x=>Number(x.is_guide)===1) || ex[0] || null;
-
     stickers.push({
       ...r,
       image_url:`/api/sticker/${r.id}/image`,
       examples:ex,
-      guide_example:guide,
       calibrated_example_count:ex.filter(x=>x.calibrated).length,
-      placement_example_count:ex.filter(x=>x.calibrated&&x.plate_calibrated).length
+      placement_example_count:ex.filter(x=>x.calibrated&&x.plate_calibrated).length,
+      vehicle_example_count:ex.filter(x=>x.vehicle_type).length
     });
   }
 
@@ -526,6 +531,19 @@ async function updateSticker(request, env, id) {
         WHERE ne.sticker_id=?
       `).bind(id,inserted.id).run();
 
+      await env.DB.prepare(`
+        INSERT OR REPLACE INTO st_example_vehicle(
+          example_id,vehicle_type,updated_at
+        )
+        SELECT ne.id,v.vehicle_type,datetime('now')
+        FROM st_examples ne
+        JOIN st_examples oe
+          ON oe.sticker_id=? AND oe.sort_order=ne.sort_order
+        JOIN st_example_vehicle v
+          ON v.example_id=oe.id
+        WHERE ne.sticker_id=?
+      `).bind(id,inserted.id).run();
+
       return j({
         ok:true,
         id:inserted?.id,
@@ -614,6 +632,7 @@ async function deleteSticker(env, id) {
   ).bind(id).all();
 
   for (const ex of examples.results || []) {
+    await env.DB.prepare("DELETE FROM st_example_vehicle WHERE example_id=?").bind(ex.id).run();
     await env.DB.prepare("DELETE FROM st_example_geometry WHERE example_id=?").bind(ex.id).run();
     await env.DB.prepare("DELETE FROM st_examples WHERE id=?").bind(ex.id).run();
 
@@ -643,11 +662,13 @@ async function listExamples(env, stickerId) {
   const rows = await env.DB.prepare(`
     SELECT e.id,e.sort_order,e.crop_x,e.crop_y,e.crop_width,e.crop_height,
            e.is_guide,e.created_at,e.updated_at,
-           g.plate_x,g.plate_y,g.plate_width,g.plate_height
+           g.plate_x,g.plate_y,g.plate_width,g.plate_height,
+           v.vehicle_type
     FROM st_examples e
     LEFT JOIN st_example_geometry g ON g.example_id=e.id
+    LEFT JOIN st_example_vehicle v ON v.example_id=e.id
     WHERE e.sticker_id=?
-    ORDER BY e.is_guide DESC,e.sort_order ASC,e.id ASC
+    ORDER BY e.sort_order ASC,e.id ASC
   `).bind(stickerId).all();
 
   return j({
@@ -674,6 +695,12 @@ async function addExamples(request, env, stickerId) {
 
   const form=await request.formData();
   const files=form.getAll("files").filter(x=>x && typeof x!=="string" && Number(x.size||0)>0);
+  const vehicleType=String(form.get("vehicle_type")||"").trim().toLowerCase();
+  const allowedVehicles=new Set(["","k3","avante","ev3"]);
+
+  if(!allowedVehicles.has(vehicleType)){
+    return j({ok:false,error:"차종 값이 올바르지 않습니다."},400);
+  }
 
   if (!files.length) return j({ok:false,error:"추가할 예시사진을 선택해 주세요."},400);
   if (files.length>8) return j({ok:false,error:"한 번에 최대 8장까지 추가할 수 있습니다."},400);
@@ -707,6 +734,21 @@ async function addExamples(request, env, stickerId) {
         ) VALUES(?,?,?,?,?)
       `).bind(stickerId,order,key,file.type,hasGuide?0:1).run();
 
+      if(vehicleType){
+        const insertedExample=await env.DB.prepare(`
+          SELECT id FROM st_examples
+          WHERE sticker_id=? AND sort_order=? AND object_key=?
+          ORDER BY id DESC LIMIT 1
+        `).bind(stickerId,order,key).first();
+
+        if(insertedExample?.id){
+          await env.DB.prepare(`
+            INSERT OR REPLACE INTO st_example_vehicle(example_id,vehicle_type,updated_at)
+            VALUES(?,?,datetime('now'))
+          `).bind(insertedExample.id,vehicleType).run();
+        }
+      }
+
       hasGuide=true;
       order++;
     }
@@ -719,6 +761,48 @@ async function addExamples(request, env, stickerId) {
     }
     return j({ok:false,error:e.message||"예시사진 등록에 실패했습니다."},400);
   }
+}
+
+async function updateExampleVehicle(request, env, exampleId) {
+  const body=await request.json().catch(()=>({}));
+  const vehicleType=String(body.vehicle_type||"").trim().toLowerCase();
+  const allowed=new Set(["","k3","avante","ev3"]);
+
+  if(!allowed.has(vehicleType)){
+    return j({ok:false,error:"차종 값이 올바르지 않습니다."},400);
+  }
+
+  const ex=await env.DB.prepare("SELECT id,sticker_id FROM st_examples WHERE id=?")
+    .bind(exampleId).first();
+
+  if(!ex) return j({ok:false,error:"예시사진을 찾을 수 없습니다."},404);
+
+  if(vehicleType){
+    const others=await env.DB.prepare(`
+      SELECT v.example_id
+      FROM st_example_vehicle v
+      JOIN st_examples e ON e.id=v.example_id
+      WHERE e.sticker_id=? AND v.vehicle_type=? AND v.example_id<>?
+    `).bind(ex.sticker_id,vehicleType,exampleId).all();
+
+    for(const row of others.results||[]){
+      await env.DB.prepare("DELETE FROM st_example_vehicle WHERE example_id=?")
+        .bind(row.example_id).run();
+    }
+
+    await env.DB.prepare(`
+      INSERT OR REPLACE INTO st_example_vehicle(example_id,vehicle_type,updated_at)
+      VALUES(?,?,datetime('now'))
+    `).bind(exampleId,vehicleType).run();
+  }else{
+    await env.DB.prepare("DELETE FROM st_example_vehicle WHERE example_id=?")
+      .bind(exampleId).run();
+  }
+
+  await env.DB.prepare("DELETE FROM st_analysis_cache WHERE sticker_id=?")
+    .bind(ex.sticker_id).run();
+
+  return j({ok:true,vehicle_type:vehicleType||null});
 }
 
 async function updateExampleRoi(request, env, exampleId) {
@@ -790,6 +874,7 @@ async function deleteExample(env, exampleId) {
     return j({ok:false,error:"정상부착 예시사진은 최소 1장을 유지해야 합니다."},409);
   }
 
+  await env.DB.prepare("DELETE FROM st_example_vehicle WHERE example_id=?").bind(exampleId).run();
   await env.DB.prepare("DELETE FROM st_example_geometry WHERE example_id=?").bind(exampleId).run();
   await env.DB.prepare("DELETE FROM st_examples WHERE id=?").bind(exampleId).run();
 
@@ -860,8 +945,10 @@ async function saveRules(request, env) {
   const colorMax = Number(body.color_difference_max);
   const designMin = Number(body.design_similarity_min ?? 82);
   const placementMin = Number(body.placement_similarity_min ?? 55);
+  const rearGeometryMin = Number(body.rear_geometry_min ?? 62);
+  const rearSizeMax = Number(body.rear_size_difference_max ?? 18);
 
-  if (![damageNormal,damageReplace,shapeMin,colorMax,designMin,placementMin].every(Number.isFinite)) {
+  if (![damageNormal,damageReplace,shapeMin,colorMax,designMin,placementMin,rearGeometryMin,rearSizeMax].every(Number.isFinite)) {
     return j({ok:false,error:"판정기준 값이 올바르지 않습니다."},400);
   }
 
@@ -871,6 +958,8 @@ async function saveRules(request, env) {
     shapeMin < 0 || shapeMin > 100 ||
     designMin < 0 || designMin > 100 ||
     placementMin < 0 || placementMin > 100 ||
+    rearGeometryMin < 0 || rearGeometryMin > 100 ||
+    rearSizeMax < 0 || rearSizeMax > 100 ||
     colorMax < 0 || colorMax > 255
   ) {
     return j({ok:false,error:"판정기준 값의 허용범위를 확인해 주세요."},400);
@@ -916,6 +1005,20 @@ async function saveRules(request, env) {
       designMin,placementMin,
       body.use_design ? 1 : 0,
       body.use_placement ? 1 : 0
+    ),
+    env.DB.prepare(`
+      INSERT INTO st_rear_rules(
+        id,rear_geometry_min,rear_size_difference_max,
+        use_rear_geometry,updated_at
+      ) VALUES(1,?,?,?,datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        rear_geometry_min=excluded.rear_geometry_min,
+        rear_size_difference_max=excluded.rear_size_difference_max,
+        use_rear_geometry=excluded.use_rear_geometry,
+        updated_at=datetime('now')
+    `).bind(
+      rearGeometryMin,rearSizeMax,
+      body.use_rear_geometry ? 1 : 0
     )
   ]);
 
