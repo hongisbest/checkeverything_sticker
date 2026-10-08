@@ -2366,6 +2366,8 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
     rearSideMismatch:rearGeometry?.sideMismatch===true,
     rearUserSide:rearGeometry?.userSide||null,
     rearNormalSide:rearGeometry?.normalSide||null,
+    rearDecisionMode:"rear-consensus-v23",
+    rearDecisionSignals:[],
     color:null,
     confidence,
     vehicleType:snapshot.vehicleType,
@@ -2398,70 +2400,90 @@ async function analyzeSnapshotAgainstMasterAndExamples(snapshot,examples){
   }
 
   if(isRear){
-    // 후면은 손상률/HOG 구조보존을 판정조건에서 제외한다.
-    // 정상 샘플에서 야간조명·후미등 반사·촬영각도만으로 오탐이 발생했기 때문이다.
-    // 후면 주판정: 존재여부(상위 단계) + 좌우 + 번호판 대비 규격 + 상대위치.
+    // V23 rear policy:
+    // Perspective can heavily distort the plate/sticker size ratio.
+    // Therefore size/geometry alone are diagnostic values, not automatic failure.
+    // Rear auto-fail is reserved for:
+    //   1) opposite-side placement,
+    //   2) strongly different design corroborated by size/geometry difference.
     if(!Number.isFinite(metrics.rearGeometrySimilarity)){
       status="판정불가";
       findings.push(
-        "후면 정상 예시의 번호판 기준영역이 없어 크기·부착위치 판정을 수행하지 못했습니다."
+        "후면 정상 예시의 번호판 기준영역이 없어 부착위치 판정을 수행하지 못했습니다."
       );
     }else{
-      if(Number(rules.use_rear_geometry ?? 1)===1){
-        if(metrics.rearSideMismatch===true){
-          status="확인필요";
-          findings.push(
-            `후면 좌우 부착위치 불일치 → 정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)}`
-          );
-        }
+      const signals=[];
 
-        if(metrics.rearSizeDifference>Number(rules.rear_size_difference_max ?? 18)){
-          status="확인필요";
-          findings.push(
-            `후면 스티커 규격 차이 ${metrics.rearSizeDifference}% → 정상 예시 대비 크기가 달라 임의제작·규격상이 여부 확인필요`
-          );
-        }
-
-        if(Number.isFinite(metrics.rearHorizontalDifference) &&
-           metrics.rearHorizontalDifference>42){
-          status="확인필요";
-          findings.push(
-            `후면 수평 위치차이 ${metrics.rearHorizontalDifference}% → 번호판 대비 좌우 위치 확인필요`
-          );
-        }
-
-        if(Number.isFinite(metrics.rearVerticalDifference) &&
-           metrics.rearVerticalDifference>65){
-          status="확인필요";
-          findings.push(
-            `후면 수직 위치차이 ${metrics.rearVerticalDifference}% → 번호판 대비 상하 위치 확인필요`
-          );
-        }
-
-        if(metrics.rearGeometrySimilarity<Number(rules.rear_geometry_min ?? 62)){
-          status="확인필요";
-          findings.push(
-            `후면 기준 유사도 ${metrics.rearGeometrySimilarity}% → 같은 차종 정상 예시 대비 크기·상대위치 확인필요`
-          );
-        }
-      }
-
-      // 정상 샘플은 야간/각도 차이로 디자인 점수가 60%대까지 내려갈 수 있어
-      // 후면에서는 매우 큰 형상 불일치만 보조적으로 임의제작 의심 처리한다.
-      const rearDesignFloor=50;
-      if(Number(rules.use_design ?? 1)===1 &&
-         metrics.designSimilarity<rearDesignFloor){
+      if(metrics.rearSideMismatch===true){
+        signals.push("opposite-side");
         status="확인필요";
         findings.push(
-          `후면 디자인 동일성 ${metrics.designSimilarity}% → 정상 원본과 형상이 크게 달라 임의제작 여부 확인필요`
+          `후면 좌우 부착위치 불일치 → 정상 ${rearSideLabel(metrics.rearNormalSide)} / 촬영 ${rearSideLabel(metrics.rearUserSide)}`
         );
       }
-    }
 
-    if(status==="정상"&&!findings.length){
-      findings.push(
-        `${vehicleLabel(snapshot.vehicleType)} 후면 정상 예시 대비 스티커 존재·좌우·규격·상대위치가 정상 범위입니다.`
-      );
+      const designWeak=
+        Number.isFinite(metrics.designSimilarity) &&
+        metrics.designSimilarity<58;
+
+      const sizeWeak=
+        Number.isFinite(metrics.rearSizeDifference) &&
+        metrics.rearSizeDifference>25;
+
+      const geometryWeak=
+        Number.isFinite(metrics.rearGeometrySimilarity) &&
+        metrics.rearGeometrySimilarity<48;
+
+      const horizontalWeak=
+        Number.isFinite(metrics.rearHorizontalDifference) &&
+        metrics.rearHorizontalDifference>55;
+
+      const verticalWeak=
+        Number.isFinite(metrics.rearVerticalDifference) &&
+        metrics.rearVerticalDifference>85;
+
+      if(designWeak)signals.push("design");
+      if(sizeWeak)signals.push("size");
+      if(geometryWeak)signals.push("geometry");
+      if(horizontalWeak)signals.push("horizontal");
+      if(verticalWeak)signals.push("vertical");
+
+      // Previous fabricated sample:
+      // design is different AND its apparent size/placement differs.
+      // A single noisy metric caused by close/oblique shooting is not enough.
+      const fabricatedEvidence=
+        designWeak &&
+        (sizeWeak||geometryWeak||horizontalWeak||verticalWeak);
+
+      if(fabricatedEvidence){
+        status="확인필요";
+        findings.push(
+          `후면 임의제작 의심 → 디자인 ${metrics.designSimilarity}% + `+
+          `규격/위치 보조신호가 함께 확인됨`
+        );
+      }
+
+      // Extremely different artwork can still be caught even when geometry is
+      // unavailable or looks deceptively similar.
+      if(Number.isFinite(metrics.designSimilarity) &&
+         metrics.designSimilarity<40){
+        status="확인필요";
+        if(!findings.some(x=>x.includes("임의제작"))){
+          findings.push(
+            `후면 디자인 동일성 ${metrics.designSimilarity}% → 정상 원본과 형상이 크게 달라 임의제작 여부 확인필요`
+          );
+        }
+      }
+
+      metrics.rearDecisionSignals=signals;
+
+      if(status==="정상"&&!findings.length){
+        findings.push(
+          `${vehicleLabel(snapshot.vehicleType)} 후면 기준: 좌우 부착위치 정상. `+
+          `규격·상대위치는 촬영각도 영향이 커 참고값으로만 사용하며, `+
+          `임의제작은 디자인과 규격/위치가 함께 다를 때 확인필요로 판정합니다.`
+        );
+      }
     }
   }else if(status!=="판정불가"){
     // 측면은 기존 판정 로직 유지
