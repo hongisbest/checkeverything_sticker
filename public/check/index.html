@@ -68,34 +68,36 @@
 
 <section class="card">
   <div class="section-head">
-    <div><span class="step">STEP 03</span><h2>차량사진 촬영 / 업로드</h2></div>
-    <span id="cameraStatus" class="badge">대기</span>
+    <div><span class="step">STEP 03</span><h2>차량사진 선택</h2></div>
+    <span class="badge">사진 1장</span>
   </div>
 
   <div class="message info photo-requirement">
-    <strong>촬영 방향은 자유입니다.</strong>
-    세로·가로와 관계없이 <b>차량번호판과 점검할 홍보스티커가 한 장의 사진에 함께 선명하게 보이도록</b> 촬영해 주세요.
+    <strong>차량번호판과 홍보스티커가 한 장에 함께 보이는 사진을 준비해 주세요.</strong>
+    세로·가로 방향은 자유이며 차량 전체를 담을 필요는 없습니다.
+    번호판과 스티커를 알아볼 수 있을 정도로 선명하게 촬영해 주세요.
   </div>
 
-  <div id="cameraStage" class="camera-stage free-camera-stage">
-    <video id="cameraVideo" autoplay playsinline muted></video>
-    <div id="cameraPlaceholder" class="camera-placeholder">
-      <strong>번호판 + 홍보스티커가 함께 보이게 촬영</strong>
-      <span>차량 전체를 꼭 담을 필요는 없습니다. 두 필수영역이 잘 보이면 됩니다.</span>
-    </div>
-  </div>
-
-  <div class="camera-controls free-camera-controls">
-    <button id="startCameraBtn" class="btn primary">카메라 시작</button>
-    <button id="captureBtn" class="btn secondary" disabled>현재 화면 촬영</button>
-  </div>
-
-  <label class="btn full photo-file-button">
+  <label class="btn primary full photo-file-button" style="margin-top:12px">
     사진 촬영 / 앨범에서 선택
-    <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+    <input id="photoInput" type="file" accept="image/*" hidden>
   </label>
 
-  <canvas id="captureCanvas" hidden></canvas>
+  <div class="message info" style="margin-top:10px">
+    사진을 선택한 뒤 번호판 영역만 지정합니다. 스티커 영역은 사용자가 지정하지 않습니다.
+  </div>
+
+  <!-- 기존 check.js 호환용 비표시 요소 -->
+  <div hidden aria-hidden="true">
+    <span id="cameraStatus">대기</span>
+    <div id="cameraStage">
+      <video id="cameraVideo" autoplay playsinline muted></video>
+      <div id="cameraPlaceholder"></div>
+    </div>
+    <button id="startCameraBtn" type="button" tabindex="-1">카메라 시작</button>
+    <button id="captureBtn" type="button" tabindex="-1" disabled>현재 화면 촬영</button>
+    <canvas id="captureCanvas"></canvas>
+  </div>
 </section>
 
 <section id="selectionSection" class="card hidden">
@@ -150,8 +152,8 @@
   </div>
 
   <div class="message info">
-    아래 두 영역이 실제 점검대상과 맞는지만 확인해 주세요.
-    스티커의 정상/손상 여부는 제출 후 관리자 화면에서만 확인됩니다.
+    번호판 영역과 입력한 차량번호를 확인해 주세요.
+    스티커 유무 및 후면 좌우 위치는 제출 후 자동분석되어 관리자 화면에만 표시됩니다.
   </div>
 
   <div class="capture-review-grid">
@@ -200,7 +202,7 @@
 
   <div class="final-review-check">
     <strong>제출 전 확인</strong>
-    <span>번호판과 홍보스티커가 알아볼 수 있을 정도로 선명하고, 선택영역이 실제 위치와 맞으면 제출해 주세요.</span>
+    <span>번호판이 선명하고 입력 차량번호와 일치하는지 확인한 뒤 제출해 주세요.</span>
   </div>
 
   <div class="submission-actions">
@@ -235,7 +237,9 @@
 </section>
 
 </main>
-<script src="/js/check.js?v=26.0.0"></script>
-<script src="/js/check-presence-guard-v26.js?v=26.0.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js"></script>
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+<script src="/js/check.js?v=30.0.0"></script>
+<script src="/js/check-final-v30.js?v=30.0.0"></script>
 </body>
 </html>
