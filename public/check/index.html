@@ -35,7 +35,7 @@
     <div class="form-group"><label>차량번호 *</label><input id="vehicleNo" type="text" required placeholder="예: 222하1701"></div>
   </div>
   <div id="vehicleRegistryMessage" class="message info" style="margin-top:12px">
-    관리자 등록 차량데이터와 성명·사번·부서·차량번호 4개 항목을 대조합니다.
+    성명·사번·부서·차량번호를 모두 입력하면 관리자 등록 차량데이터와 자동으로 대조합니다.
   </div>
 </section>
 
@@ -160,8 +160,8 @@
   </div>
 
   <div class="message info">
-    입력한 성명·사번·부서·차량번호가 관리자 등록 차량데이터와 일치하는지 확인합니다.
-    스티커 유무 및 후면 좌우 위치는 제출 후 자동분석되어 관리자 화면에만 표시됩니다.
+    아래 촬영영역의 <b>크기와 선명도만 확인</b>해 주세요.
+    자동판정 결과는 제출 후 관리자 화면에만 표시됩니다.
   </div>
 
   <div class="capture-review-grid">
@@ -188,29 +188,19 @@
       <div id="reviewPlateCrop" class="capture-review-image"></div>
       <div id="reviewPlateQuality" class="message info">번호판 촬영영역을 확인해 주세요.</div>
 
-      <div class="plate-match-panel">
-        <div class="plate-match-row">
-          <span>입력 차량번호</span>
-          <strong id="enteredVehicleNoPreview">-</strong>
-        </div>
-        <div class="plate-match-row">
-          <span>등록데이터 대조</span>
-          <strong id="plateOcrPreview">확인 전</strong>
-        </div>
-        <div id="plateOcrMessage" class="message info">
-          성명·사번·부서·차량번호 4개 항목을 관리자 등록데이터와 대조합니다.
-        </div>
-        <label class="plate-match-confirm" style="display:none">
-          <input id="plateMatchConfirm" type="checkbox">
-          <span>등록 차량데이터 일치</span>
-        </label>
+      <!-- 기존 check.js 호환용 비표시 요소: 사용자에게 정보대조를 다시 보여주지 않음 -->
+      <div hidden aria-hidden="true">
+        <strong id="enteredVehicleNoPreview">-</strong>
+        <strong id="plateOcrPreview">확인 전</strong>
+        <div id="plateOcrMessage"></div>
+        <input id="plateMatchConfirm" type="checkbox">
       </div>
     </div>
   </div>
 
   <div class="final-review-check">
-    <strong>제출 전 확인</strong>
-    <span>등록 차량데이터와 입력정보가 일치한 경우에만 제출할 수 있습니다.</span>
+    <strong>촬영상태 확인</strong>
+    <span>스티커와 번호판 영역이 충분히 크고 선명하게 보이는지만 확인한 뒤 제출해 주세요.</span>
   </div>
 
   <div class="submission-actions">
@@ -248,6 +238,6 @@
 <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 <script src="/js/check.js?v=30.0.0"></script>
 <script src="/js/check-final-v30.js?v=30.0.0"></script>
-<script src="/js/check-vehicle-registry-v31.js?v=31.0.0"></script>
+<script src="/js/check-vehicle-registry-v31.js?v=31.1.0"></script>
 </body>
 </html>
