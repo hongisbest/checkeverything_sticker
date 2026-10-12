@@ -24,10 +24,18 @@
     <div><span class="step">STEP 01</span><h2>점검자 / 차량 정보</h2></div>
   </div>
   <div class="profile-grid">
-    <div class="form-group"><label>성명 *</label><input id="employeeName" type="text"></div>
-    <div class="form-group"><label>사번</label><input id="employeeId" type="text"></div>
-    <div class="form-group"><label>부서</label><input id="department" type="text"></div>
-    <div class="form-group"><label>차량번호 *</label><input id="vehicleNo" type="text"></div>
+    <div class="form-group"><label>성명 *</label><input id="employeeName" type="text" required autocomplete="name"></div>
+    <div class="form-group"><label>사번 *</label><input id="employeeId" type="text" required></div>
+    <div class="form-group">
+      <label>부서 *</label>
+      <select id="department" required>
+        <option value="">부서를 선택해 주세요</option>
+      </select>
+    </div>
+    <div class="form-group"><label>차량번호 *</label><input id="vehicleNo" type="text" required placeholder="예: 222하1701"></div>
+  </div>
+  <div id="vehicleRegistryMessage" class="message info" style="margin-top:12px">
+    관리자 등록 차량데이터와 성명·사번·부서·차량번호 4개 항목을 대조합니다.
   </div>
 </section>
 
@@ -152,7 +160,7 @@
   </div>
 
   <div class="message info">
-    번호판 영역과 입력한 차량번호를 확인해 주세요.
+    입력한 성명·사번·부서·차량번호가 관리자 등록 차량데이터와 일치하는지 확인합니다.
     스티커 유무 및 후면 좌우 위치는 제출 후 자동분석되어 관리자 화면에만 표시됩니다.
   </div>
 
@@ -182,19 +190,19 @@
 
       <div class="plate-match-panel">
         <div class="plate-match-row">
-          <span>입력한 차량번호</span>
+          <span>입력 차량번호</span>
           <strong id="enteredVehicleNoPreview">-</strong>
         </div>
         <div class="plate-match-row">
-          <span>자동판독</span>
-          <strong id="plateOcrPreview">판독 전</strong>
+          <span>등록데이터 대조</span>
+          <strong id="plateOcrPreview">확인 전</strong>
         </div>
         <div id="plateOcrMessage" class="message info">
-          자동판독이 지원되지 않거나 결과가 애매하면 확대된 번호판을 직접 확인해 주세요.
+          성명·사번·부서·차량번호 4개 항목을 관리자 등록데이터와 대조합니다.
         </div>
-        <label class="plate-match-confirm">
+        <label class="plate-match-confirm" style="display:none">
           <input id="plateMatchConfirm" type="checkbox">
-          <span>촬영된 번호판과 입력한 차량번호가 일치함을 확인했습니다.</span>
+          <span>등록 차량데이터 일치</span>
         </label>
       </div>
     </div>
@@ -202,7 +210,7 @@
 
   <div class="final-review-check">
     <strong>제출 전 확인</strong>
-    <span>번호판이 선명하고 입력 차량번호와 일치하는지 확인한 뒤 제출해 주세요.</span>
+    <span>등록 차량데이터와 입력정보가 일치한 경우에만 제출할 수 있습니다.</span>
   </div>
 
   <div class="submission-actions">
@@ -237,9 +245,9 @@
 </section>
 
 </main>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js"></script>
 <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 <script src="/js/check.js?v=30.0.0"></script>
 <script src="/js/check-final-v30.js?v=30.0.0"></script>
+<script src="/js/check-vehicle-registry-v31.js?v=31.0.0"></script>
 </body>
 </html>
