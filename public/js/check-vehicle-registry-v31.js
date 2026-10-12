@@ -4,6 +4,8 @@
   let registryVerified=false;
   let lastVerifiedSignature="";
   let departmentsLoaded=false;
+  let verifyTimer=null;
+  let verifySequence=0;
 
   const originalOpenSubmissionReview=window.openSubmissionReview;
   const originalSubmitInspection=window.submitInspection;
@@ -57,7 +59,7 @@
     if(box){
       box.className="message info";
       box.textContent=
-        "관리자 등록 차량데이터와 성명·사번·부서·차량번호 4개 항목을 대조합니다.";
+        "성명·사번·부서·차량번호를 모두 입력하면 등록 차량데이터와 자동으로 대조합니다.";
     }
   }
 
@@ -89,6 +91,10 @@
 
       departmentsLoaded=true;
 
+      if(allRequired(values())){
+        scheduleStep1Verification(150);
+      }
+
       const box=field("vehicleRegistryMessage");
       if(!departments.length && box){
         box.className="message warn";
@@ -115,14 +121,15 @@
     }
   }
 
-  async function verifyRegistry({showSuccess=true}={}){
+  async function verifyRegistry({showSuccess=true,silentIncomplete=false}={}){
     const v=values();
     const box=field("vehicleRegistryMessage");
+    const requestSequence=++verifySequence;
 
     if(!allRequired(v)){
       resetMatchState();
 
-      if(box){
+      if(box && !silentIncomplete){
         box.className="message warn";
         box.textContent="성명, 사번, 부서, 차량번호를 모두 입력해 주세요.";
       }
@@ -152,6 +159,10 @@
 
       if(!r.ok){
         throw new Error(d.error||"차량데이터 대조 실패");
+      }
+
+      if(requestSequence!==verifySequence){
+        return false;
       }
 
       registryVerified=d.matched===true;
@@ -195,6 +206,29 @@
 
       return false;
     }
+  }
+
+  function scheduleStep1Verification(delay=550){
+    if(verifyTimer){
+      clearTimeout(verifyTimer);
+    }
+
+    const v=values();
+
+    if(!allRequired(v)){
+      resetMatchState();
+      return;
+    }
+
+    const box=field("vehicleRegistryMessage");
+    if(box){
+      box.className="message info";
+      box.textContent="입력정보 확인 대기 중...";
+    }
+
+    verifyTimer=setTimeout(()=>{
+      verifyRegistry({showSuccess:true,silentIncomplete:true});
+    },delay);
   }
 
   window.openSubmissionReview=async function(){
@@ -297,7 +331,18 @@
       el.addEventListener(eventName,()=>{
         resetMatchState();
         saveProfileSafe();
+        scheduleStep1Verification(
+          el.tagName==="SELECT" ? 120 : 550
+        );
       });
+
+      if(el.tagName!=="SELECT"){
+        el.addEventListener("blur",()=>{
+          if(allRequired(values())){
+            scheduleStep1Verification(80);
+          }
+        });
+      }
     });
 
     // check.js already attached the original handlers before this listener runs.
