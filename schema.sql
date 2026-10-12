@@ -141,3 +141,29 @@ CREATE TABLE IF NOT EXISTS st_rear_rules (
 INSERT OR IGNORE INTO st_rear_rules (
   id,rear_geometry_min,rear_size_difference_max,use_rear_geometry
 ) VALUES (1,62,18,1);
+
+-- 차량/임직원 등록데이터
+-- 성명·사번·부서·차량번호 4개 항목만 현재 점검에 사용합니다.
+CREATE TABLE IF NOT EXISTS st_vehicle_registry (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  employee_name TEXT NOT NULL,
+  employee_id TEXT NOT NULL,
+  department TEXT NOT NULL,
+  vehicle_no TEXT NOT NULL,
+  employee_name_key TEXT NOT NULL,
+  employee_id_key TEXT NOT NULL,
+  department_key TEXT NOT NULL,
+  vehicle_no_key TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(employee_id_key,vehicle_no_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_department
+ON st_vehicle_registry(department_key);
+
+CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_name
+ON st_vehicle_registry(employee_name_key);
+
+CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_vehicle
+ON st_vehicle_registry(vehicle_no_key);
