@@ -153,7 +153,24 @@ function ensureSchema(env) {
       )`),
       env.DB.prepare(`INSERT OR IGNORE INTO st_rear_rules(
         id,rear_geometry_min,rear_size_difference_max,use_rear_geometry
-      ) VALUES(1,62,18,1)`)
+      ) VALUES(1,62,18,1)`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_vehicle_registry (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_name TEXT NOT NULL,
+        employee_id TEXT NOT NULL,
+        department TEXT NOT NULL,
+        vehicle_no TEXT NOT NULL,
+        employee_name_key TEXT NOT NULL,
+        employee_id_key TEXT NOT NULL,
+        department_key TEXT NOT NULL,
+        vehicle_no_key TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(employee_id_key,vehicle_no_key)
+      )`),
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_department ON st_vehicle_registry(department_key)"),
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_name ON st_vehicle_registry(employee_name_key)"),
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_vehicle ON st_vehicle_registry(vehicle_no_key)")
     ]).catch(e => {
       schemaPromise = null;
       throw e;
@@ -168,6 +185,8 @@ async function api(request, env, url) {
 
   // Public
   if (p === "/api/config" && request.method === "GET") return getConfig(env);
+  if (p === "/api/vehicle-registry/departments" && request.method === "GET") return getVehicleRegistryDepartments(env);
+  if (p === "/api/vehicle-registry/verify" && request.method === "POST") return verifyVehicleRegistry(request, env);
   if (p === "/api/analysis-cache" && request.method === "GET") return getAnalysisCache(env, url);
   if (p === "/api/analysis-cache" && request.method === "POST") return saveAnalysisCache(request, env);
   if (p === "/api/inspection" && request.method === "POST") return saveInspection(request, env);
@@ -223,6 +242,16 @@ async function api(request, env, url) {
 
   const exampleDelete = p.match(/^\/api\/admin\/examples\/(\d+)$/);
   if (exampleDelete && request.method === "DELETE") return deleteExample(env, Number(exampleDelete[1]));
+
+  // Vehicle registry
+  if (p === "/api/admin/vehicle-data" && request.method === "GET") return listVehicleRegistry(env, url);
+  if (p === "/api/admin/vehicle-data" && request.method === "POST") return createVehicleRegistryRow(request, env);
+  if (p === "/api/admin/vehicle-data/import" && request.method === "POST") return importVehicleRegistry(request, env);
+  if (p === "/api/admin/vehicle-data/export" && request.method === "GET") return exportVehicleRegistry(env);
+
+  const vehicleDataRow = p.match(/^\/api\/admin\/vehicle-data\/(\d+)$/);
+  if (vehicleDataRow && request.method === "PATCH") return updateVehicleRegistryRow(request, env, Number(vehicleDataRow[1]));
+  if (vehicleDataRow && request.method === "DELETE") return deleteVehicleRegistryRow(env, Number(vehicleDataRow[1]));
 
   // Rules
   if (p === "/api/admin/rules" && request.method === "GET") return j({ok:true,rules:await readRules(env)});
@@ -299,6 +328,353 @@ async function verifyAdmin(request, env) {
   } catch {
     return false;
   }
+}
+
+
+function registryText(value,max=120){
+  return txt(value,max).replace(/\s+/g," ").trim();
+}
+
+function registryKey(value){
+  return String(value??"")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g," ")
+    .toUpperCase();
+}
+
+function registryVehicleKey(value){
+  return String(value??"")
+    .normalize("NFKC")
+    .trim()
+    .replace(/[\s-]+/g,"")
+    .toUpperCase();
+}
+
+function normalizeRegistryRow(input){
+  const employeeName=registryText(input?.employee_name,60);
+  const employeeId=registryText(input?.employee_id,40);
+  const department=registryText(input?.department,100);
+  const vehicleNo=registryText(input?.vehicle_no,40);
+
+  if(!employeeName||!employeeId||!department||!vehicleNo){
+    return{ok:false,error:"성명, 사번, 부서, 차량번호는 모두 필수입니다."};
+  }
+
+  return{
+    ok:true,
+    row:{
+      employee_name:employeeName,
+      employee_id:employeeId,
+      department,
+      vehicle_no:vehicleNo,
+      employee_name_key:registryKey(employeeName),
+      employee_id_key:registryKey(employeeId),
+      department_key:registryKey(department),
+      vehicle_no_key:registryVehicleKey(vehicleNo)
+    }
+  };
+}
+
+async function getVehicleRegistryDepartments(env){
+  const rows=await env.DB.prepare(`
+    SELECT department, MIN(department_key) AS department_key
+    FROM st_vehicle_registry
+    GROUP BY department_key
+    ORDER BY department COLLATE NOCASE ASC
+  `).all();
+
+  return j({
+    ok:true,
+    departments:(rows.results||[]).map(x=>String(x.department||"")).filter(Boolean)
+  });
+}
+
+async function verifyVehicleRegistry(request,env){
+  const body=await request.json().catch(()=>({}));
+  const parsed=normalizeRegistryRow(body);
+
+  if(!parsed.ok){
+    return j({ok:false,matched:false,error:parsed.error},400);
+  }
+
+  const r=parsed.row;
+
+  const found=await env.DB.prepare(`
+    SELECT id
+    FROM st_vehicle_registry
+    WHERE employee_name_key=?
+      AND employee_id_key=?
+      AND department_key=?
+      AND vehicle_no_key=?
+    LIMIT 1
+  `).bind(
+    r.employee_name_key,
+    r.employee_id_key,
+    r.department_key,
+    r.vehicle_no_key
+  ).first();
+
+  return j({
+    ok:true,
+    matched:Boolean(found?.id)
+  });
+}
+
+async function listVehicleRegistry(env,url){
+  const page=Math.max(1,Number(url.searchParams.get("page"))||1);
+  const pageSize=15;
+
+  const sortMap={
+    employee_name:"employee_name",
+    employee_id:"employee_id",
+    department:"department",
+    vehicle_no:"vehicle_no",
+    updated_at:"updated_at"
+  };
+
+  const sort=sortMap[url.searchParams.get("sort")]||"employee_name";
+  const dir=String(url.searchParams.get("dir")||"asc").toLowerCase()==="desc"
+    ? "DESC"
+    : "ASC";
+
+  const q=registryText(url.searchParams.get("q"),100);
+  const employeeName=registryText(url.searchParams.get("employee_name"),60);
+  const employeeId=registryText(url.searchParams.get("employee_id"),40);
+  const department=registryText(url.searchParams.get("department"),100);
+  const vehicleNo=registryText(url.searchParams.get("vehicle_no"),40);
+
+  const where=[];
+  const values=[];
+
+  if(q){
+    const like=`%${q}%`;
+    where.push(`(
+      employee_name LIKE ? OR
+      employee_id LIKE ? OR
+      department LIKE ? OR
+      vehicle_no LIKE ?
+    )`);
+    values.push(like,like,like,like);
+  }
+
+  if(employeeName){
+    where.push("employee_name LIKE ?");
+    values.push(`%${employeeName}%`);
+  }
+
+  if(employeeId){
+    where.push("employee_id LIKE ?");
+    values.push(`%${employeeId}%`);
+  }
+
+  if(department){
+    where.push("department LIKE ?");
+    values.push(`%${department}%`);
+  }
+
+  if(vehicleNo){
+    where.push("vehicle_no LIKE ?");
+    values.push(`%${vehicleNo}%`);
+  }
+
+  const clause=where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const totalRow=await env.DB.prepare(`
+    SELECT COUNT(*) AS c
+    FROM st_vehicle_registry
+    ${clause}
+  `).bind(...values).first();
+
+  const total=Number(totalRow?.c||0);
+  const totalPages=Math.max(1,Math.ceil(total/pageSize));
+  const safePage=Math.min(page,totalPages);
+  const offset=(safePage-1)*pageSize;
+
+  const rows=await env.DB.prepare(`
+    SELECT id,employee_name,employee_id,department,vehicle_no,created_at,updated_at
+    FROM st_vehicle_registry
+    ${clause}
+    ORDER BY ${sort} ${dir}, id ASC
+    LIMIT ? OFFSET ?
+  `).bind(...values,pageSize,offset).all();
+
+  return j({
+    ok:true,
+    items:rows.results||[],
+    page:safePage,
+    page_size:pageSize,
+    total,
+    total_pages:totalPages,
+    sort,
+    dir:dir.toLowerCase()
+  });
+}
+
+async function createVehicleRegistryRow(request,env){
+  const body=await request.json().catch(()=>({}));
+  const parsed=normalizeRegistryRow(body);
+
+  if(!parsed.ok)return j({ok:false,error:parsed.error},400);
+
+  const r=parsed.row;
+
+  const result=await env.DB.prepare(`
+    INSERT INTO st_vehicle_registry(
+      employee_name,employee_id,department,vehicle_no,
+      employee_name_key,employee_id_key,department_key,vehicle_no_key,
+      updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,datetime('now'))
+    ON CONFLICT(employee_id_key,vehicle_no_key) DO UPDATE SET
+      employee_name=excluded.employee_name,
+      department=excluded.department,
+      employee_name_key=excluded.employee_name_key,
+      department_key=excluded.department_key,
+      vehicle_no=excluded.vehicle_no,
+      updated_at=datetime('now')
+    RETURNING id
+  `).bind(
+    r.employee_name,r.employee_id,r.department,r.vehicle_no,
+    r.employee_name_key,r.employee_id_key,r.department_key,r.vehicle_no_key
+  ).first();
+
+  return j({ok:true,id:result?.id});
+}
+
+async function importVehicleRegistry(request,env){
+  const body=await request.json().catch(()=>({}));
+  const rows=Array.isArray(body.rows)?body.rows:[];
+
+  if(!rows.length){
+    return j({ok:false,error:"등록할 차량 데이터가 없습니다."},400);
+  }
+
+  if(rows.length>10000){
+    return j({ok:false,error:"한 번에 최대 10,000건까지 등록할 수 있습니다."},400);
+  }
+
+  const normalized=[];
+  const invalid=[];
+
+  rows.forEach((row,index)=>{
+    const parsed=normalizeRegistryRow(row);
+    if(parsed.ok){
+      normalized.push(parsed.row);
+    }else{
+      invalid.push(index+2);
+    }
+  });
+
+  if(invalid.length){
+    return j({
+      ok:false,
+      error:`필수값이 비어 있는 행이 있습니다: ${invalid.slice(0,20).join(", ")}${invalid.length>20?" 외":""}`
+    },400);
+  }
+
+  let processed=0;
+
+  for(let i=0;i<normalized.length;i+=80){
+    const chunk=normalized.slice(i,i+80);
+    const statements=chunk.map(r=>env.DB.prepare(`
+      INSERT INTO st_vehicle_registry(
+        employee_name,employee_id,department,vehicle_no,
+        employee_name_key,employee_id_key,department_key,vehicle_no_key,
+        updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,datetime('now'))
+      ON CONFLICT(employee_id_key,vehicle_no_key) DO UPDATE SET
+        employee_name=excluded.employee_name,
+        department=excluded.department,
+        employee_name_key=excluded.employee_name_key,
+        department_key=excluded.department_key,
+        vehicle_no=excluded.vehicle_no,
+        updated_at=datetime('now')
+    `).bind(
+      r.employee_name,r.employee_id,r.department,r.vehicle_no,
+      r.employee_name_key,r.employee_id_key,r.department_key,r.vehicle_no_key
+    ));
+
+    await env.DB.batch(statements);
+    processed+=chunk.length;
+  }
+
+  return j({ok:true,processed});
+}
+
+async function exportVehicleRegistry(env){
+  const rows=await env.DB.prepare(`
+    SELECT employee_name,employee_id,department,vehicle_no
+    FROM st_vehicle_registry
+    ORDER BY department COLLATE NOCASE ASC, employee_name COLLATE NOCASE ASC, id ASC
+  `).all();
+
+  return j({ok:true,items:rows.results||[]});
+}
+
+async function updateVehicleRegistryRow(request,env,id){
+  const body=await request.json().catch(()=>({}));
+  const parsed=normalizeRegistryRow(body);
+
+  if(!parsed.ok)return j({ok:false,error:parsed.error},400);
+
+  const exists=await env.DB.prepare(
+    "SELECT id FROM st_vehicle_registry WHERE id=?"
+  ).bind(id).first();
+
+  if(!exists)return j({ok:false,error:"차량 데이터를 찾을 수 없습니다."},404);
+
+  const r=parsed.row;
+
+  try{
+    await env.DB.prepare(`
+      UPDATE st_vehicle_registry
+      SET employee_name=?,employee_id=?,department=?,vehicle_no=?,
+          employee_name_key=?,employee_id_key=?,department_key=?,vehicle_no_key=?,
+          updated_at=datetime('now')
+      WHERE id=?
+    `).bind(
+      r.employee_name,r.employee_id,r.department,r.vehicle_no,
+      r.employee_name_key,r.employee_id_key,r.department_key,r.vehicle_no_key,
+      id
+    ).run();
+  }catch(e){
+    if(String(e?.message||"").toLowerCase().includes("unique")){
+      return j({ok:false,error:"같은 사번과 차량번호 조합이 이미 등록되어 있습니다."},409);
+    }
+    throw e;
+  }
+
+  return j({ok:true});
+}
+
+async function deleteVehicleRegistryRow(env,id){
+  const result=await env.DB.prepare(
+    "DELETE FROM st_vehicle_registry WHERE id=?"
+  ).bind(id).run();
+
+  return j({ok:true,deleted:Number(result?.meta?.changes||0)});
+}
+
+async function findVehicleRegistryMatch(env,data){
+  const parsed=normalizeRegistryRow(data);
+  if(!parsed.ok)return null;
+
+  const r=parsed.row;
+
+  return env.DB.prepare(`
+    SELECT id
+    FROM st_vehicle_registry
+    WHERE employee_name_key=?
+      AND employee_id_key=?
+      AND department_key=?
+      AND vehicle_no_key=?
+    LIMIT 1
+  `).bind(
+    r.employee_name_key,
+    r.employee_id_key,
+    r.department_key,
+    r.vehicle_no_key
+  ).first();
 }
 
 async function readRules(env) {
@@ -1183,10 +1559,26 @@ async function saveInspection(request, env) {
   if (!sticker) return j({ok:false,error:"기준 스티커를 찾을 수 없습니다."},400);
 
   const name = txt(meta.employee_name,60);
+  const employeeId = txt(meta.employee_id,40);
+  const department = txt(meta.department,100);
   const vehicle = txt(meta.vehicle_no,40);
 
-  if (!name || !vehicle) {
-    return j({ok:false,error:"성명과 차량번호를 입력해 주세요."},400);
+  if (!name || !employeeId || !department || !vehicle) {
+    return j({ok:false,error:"성명, 사번, 부서, 차량번호를 모두 입력해 주세요."},400);
+  }
+
+  const registryMatch=await findVehicleRegistryMatch(env,{
+    employee_name:name,
+    employee_id:employeeId,
+    department,
+    vehicle_no:vehicle
+  });
+
+  if(!registryMatch){
+    return j({
+      ok:false,
+      error:"입력한 성명·사번·부서·차량번호가 관리자 등록 차량데이터와 일치하지 않습니다."
+    },409);
   }
 
   const key = `sticker-compare/inspection/${Date.now()}-${crypto.randomUUID()}.jpg`;
@@ -1213,8 +1605,8 @@ async function saveInspection(request, env) {
       RETURNING id
     `).bind(
       name,
-      txt(meta.employee_id,40),
-      txt(meta.department,80),
+      employeeId,
+      department,
       vehicle,
       stickerId,
       key,
