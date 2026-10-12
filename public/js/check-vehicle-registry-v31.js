@@ -1,6 +1,8 @@
 (() => {
   "use strict";
 
+  window.__vehicleRegistryScriptVersion="31.3";
+
   let registryVerified=false;
   let lastVerifiedSignature="";
   let departmentsLoaded=false;
@@ -48,11 +50,6 @@
 
     if(field("plateMatchConfirm")){
       field("plateMatchConfirm").checked=false;
-    }
-
-    if(window.S){
-      S.plateMatchConfirmed=false;
-      S.plateOcrResult=null;
     }
 
     const box=field("vehicleRegistryMessage");
@@ -198,20 +195,14 @@
   }
 
   function applyLegacySubmitCompatibility(matched){
-    // V31에서는 STEP 01 등록데이터 완전일치가 기존 번호판 OCR 확인을 대체합니다.
-    // 사용자에게 추가 체크를 요구하지 않고 기존 check.js가 요구하는 내부값만 맞춥니다.
-    if(field("plateMatchConfirm")){
-      field("plateMatchConfirm").checked=matched===true;
-    }
+    // check.js의 상태객체 S는 최상위 const라 window.S로 접근할 수 없습니다.
+    // check.js가 plateMatchConfirm에 연결한 change 이벤트를 발생시켜
+    // 내부 S.plateMatchConfirmed 값까지 동기화합니다.
+    const confirm=field("plateMatchConfirm");
 
-    if(window.S){
-      S.plateMatchConfirmed=matched===true;
-      S.plateOcrResult={
-        supported:true,
-        matched:matched===true,
-        text:matched ? "등록데이터 일치" : "등록데이터 불일치",
-        source:"vehicle-registry"
-      };
+    if(confirm){
+      confirm.checked=matched===true;
+      confirm.dispatchEvent(new Event("change",{bubbles:true}));
     }
   }
 
