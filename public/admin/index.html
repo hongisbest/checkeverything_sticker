@@ -13,7 +13,7 @@
   <div>
     <p class="eyebrow">VEHICLE STICKER INSPECTION · ADMIN</p>
     <h1>법인차량 홍보스티커 점검 관리자</h1>
-    <p class="sub">스티커 원본을 판정기준으로 사용하고, 정상부착 예시사진은 촬영가이드와 정상상태 보정 데이터로 관리합니다.</p>
+    <p class="sub">정상부착 예시사진을 기준으로 스티커 유무와 후면 좌우 위치를 자동판정하고, 차량번호 OCR 대조 결과를 관리합니다.</p>
   </div>
   <span class="badge">COMPARE SITE</span>
 </section>
@@ -104,105 +104,132 @@
 <section class="card">
 
   <div class="section-head">
-    <div><span class="step">DECISION RULES</span><h2>자동판정 기준</h2></div>
-    <span id="rulesUpdatedAt" class="badge">기본값</span>
+    <div>
+      <span class="step">DECISION RULES</span>
+      <h2>자동판정 기준</h2>
+    </div>
+    <span class="badge">현재 적용기준</span>
+    <span id="rulesUpdatedAt" class="hidden">시스템 고정</span>
+  </div>
+
+  <div class="message info" style="margin-bottom:14px">
+    현재 버전은 <b>필수기능의 안정성</b>을 우선합니다.
+    아래 4개 기준만 실제 자동점검에 사용하며,
+    손상률·디자인·크기·임의제작 여부는 최종판정에 사용하지 않습니다.
   </div>
 
   <div class="rules-grid">
 
     <div class="rule-card">
       <div class="rule-head">
-        <div><strong>구조 손상지수</strong><span>정상부착 예시 대비 사라진 안정 구조영역 비율</span></div>
-        <label class="switch-row"><input id="useDamage" type="checkbox"><span>사용</span></label>
-      </div>
-      <div class="rule-fields">
-        <div class="form-group">
-          <label>정상 허용 (%)</label>
-          <input id="damageNormalMax" type="number" min="0" max="100">
+        <div>
+          <strong>① 스티커 유무</strong>
+          <span>선택한 차종의 정상예시 스티커 특징을 현재 차량사진 전체에서 직접 탐색합니다.</span>
         </div>
-        <div class="form-group">
-          <label>교체권고 (%)</label>
-          <input id="damageReplaceMin" type="number" min="0" max="100">
-        </div>
+        <span class="pill normal">사용 · 시스템 고정</span>
+      </div>
+      <p class="help">
+        정상예시 스티커와 충분한 특징점 일치가 확인되면 <b>스티커 있음</b>,
+        확인되지 않으면 <b>확인필요(미검출)</b>로 판정합니다.
+        번호판을 사용자가 어떻게 지정했는지는 스티커 유무 판정에 사용하지 않습니다.
+      </p>
+      <div class="message info">
+        적용 기준: 특징점 정합 + RANSAC 일관성 검증
+        (유효 일치점 8개 이상 및 매칭 품질 기준 충족)
       </div>
     </div>
 
     <div class="rule-card">
-      <div class="rule-head">
-        <div><strong>구조 보존율</strong><span>정상부착 상태에서 보존되어야 하는 로고·문구·그래픽 구조</span></div>
-        <label class="switch-row"><input id="useShape" type="checkbox"><span>사용</span></label>
-      </div>
-      <div class="form-group">
-        <label>최소 구조 보존율 (%)</label>
-        <input id="shapeSimilarityMin" type="number" min="0" max="100">
-      </div>
-    </div>
-
-    <div class="rule-card">
-      <div class="rule-head">
-        <div><strong>디자인 동일성</strong><span>정상 예시사진의 실제 점수범위로 스티커별 자동기준을 계산하여 폰트·로고·자간·그래픽 형상을 검사</span></div>
-        <label class="switch-row"><input id="useDesign" type="checkbox"><span>사용</span></label>
-      </div>
-      <div class="form-group">
-        <label>예시 부족 시 예비 기준 (%)</label>
-        <input id="designSimilarityMin" type="number" min="0" max="100">
-        <p class="help">정상 예시가 2장 이상이면 이 값 대신 예시들의 정상 점수범위에서 자동 기준을 산출합니다.</p>
-      </div>
-    </div>
-
-    <div class="rule-card">
-      <div class="rule-head">
-        <div><strong>부착위치 유사도</strong><span>정상 예시의 번호판 대비 스티커 상대위치와 비교</span></div>
-        <label class="switch-row"><input id="usePlacement" type="checkbox"><span>사용</span></label>
-      </div>
-      <div class="form-group">
-        <label>최소 위치 유사도 (%)</label>
-        <input id="placementSimilarityMin" type="number" min="0" max="100">
-      </div>
-      <p class="help">정상 예시사진에서 번호판 영역까지 설정한 사진이 있을 때만 적용됩니다.</p>
-    </div>
-
-    <div class="rule-card rear-rule-card">
       <div class="rule-head">
         <div>
-          <strong>후면 스티커 크기·위치</strong>
-          <span>같은 차종 정상 예시의 번호판을 기준자로 사용해 후면 스티커 크기와 상대위치를 비교</span>
+          <strong>② 후면 좌우 위치</strong>
+          <span>후면 스티커가 검출된 경우 정상예시와 동일한 방향에 부착되었는지 확인합니다.</span>
         </div>
-        <label class="switch-row"><input id="useRearGeometry" type="checkbox"><span>사용</span></label>
+        <span class="pill normal">사용 · 시스템 고정</span>
       </div>
-      <div class="grid-2">
-        <div class="form-group">
-          <label>최소 후면 기준 유사도 (%)</label>
-          <input id="rearGeometryMin" type="number" min="0" max="100">
-        </div>
-        <div class="form-group">
-          <label>허용 크기 차이 (%)</label>
-          <input id="rearSizeDifferenceMax" type="number" min="0" max="100">
-        </div>
+      <p class="help">
+        후면 정상 위치는 <b>오른쪽</b>입니다.
+        정상예시 차량사진과 현재사진을 자동 정렬하여 방향을 비교하고,
+        명확히 반대쪽이면 <b>확인필요</b>로 판정합니다.
+      </p>
+      <div class="message info">
+        오른쪽 → 정상 / 왼쪽 → 확인필요 / 좌우 확정 불가 → 판정불가
       </div>
-      <p class="help">후면 정상 예시에 번호판 영역이 설정된 경우 적용됩니다. 기본값: 기준 유사도 62% 이상 / 크기차이 18% 이하.</p>
     </div>
 
-    <div class="rule-card color-disabled-card">
+    <div class="rule-card">
       <div class="rule-head">
-        <div><strong>색상차이</strong><span>주·야간 조명차가 커 최종 자동판정에서는 사용하지 않습니다.</span></div>
-        <span class="pill">판정 제외</span>
+        <div>
+          <strong>③ 차량번호 OCR 대조</strong>
+          <span>사용자가 지정한 번호판 영역의 문자를 읽어 입력 차량번호와 비교합니다.</span>
+        </div>
+        <span class="pill normal">사용</span>
       </div>
-      <p class="help">차량색상은 흰색으로 고정되어 있으므로 손상·디자인·부착위치·구조 중심으로 판정합니다.</p>
-      <input id="useColor" type="checkbox" hidden>
-      <input id="colorDifferenceMax" type="number" hidden>
+      <p class="help">
+        자동판독 결과가 입력 차량번호와 완전히 일치하면 자동으로 일치 처리합니다.
+        측면처럼 번호판 촬영각도가 큰 경우 OCR이 어려울 수 있으며,
+        OCR 결과는 스티커 유무 판정과 독립적으로 처리됩니다.
+      </p>
+      <div class="message info">
+        완전일치 → 자동 확인 / 불일치·인식실패 → 육안확인
+      </div>
+    </div>
+
+    <div class="rule-card">
+      <div class="rule-head">
+        <div>
+          <strong>④ OCR 실패 시 육안확인</strong>
+          <span>자동판독이 불확실한 경우 확대 번호판을 사용자가 직접 대조합니다.</span>
+        </div>
+        <span class="pill normal">허용</span>
+      </div>
+      <p class="help">
+        OCR 실패만으로 제출을 막지 않습니다.
+        사용자가 촬영된 번호판과 입력 차량번호가 일치함을 직접 확인하면 제출할 수 있습니다.
+      </p>
+      <div class="message info">
+        OCR은 보조 확인기능이며 스티커 자동판정 결과를 변경하지 않습니다.
+      </div>
     </div>
 
   </div>
 
-  <div id="ruleSummary" class="rule-summary">판정기준을 불러오는 중입니다.</div>
-
-  <div class="rule-actions">
-    <button id="resetRulesBtn" class="btn">기본값 입력</button>
-    <button id="saveRulesBtn" class="btn primary">판정기준 저장</button>
+  <div class="rule-summary">
+    <strong>최종 자동판정 범위</strong>
+    <div style="margin-top:8px">• 측면: 스티커 있음 → 정상 / 미검출 → 확인필요</div>
+    <div>• 후면: 스티커 있음 + 오른쪽 → 정상 / 왼쪽 → 확인필요</div>
+    <div>• 분석 자체가 불확실한 경우 → 판정불가</div>
   </div>
 
-  <div id="rulesMessage" class="message info">저장한 값은 신규 점검부터 바로 적용됩니다.</div>
+  <div class="message info" style="margin-top:14px">
+    제외 기준: 구조 손상지수, 구조 보존율, 디자인 동일성, 기존 부착위치 유사도,
+    후면 크기차이, 색상차이, 임의제작 판정.
+    필요 시 향후 별도 기능으로 추가합니다.
+  </div>
+
+  <!-- 기존 관리자 JS/API 호환용 비표시 요소 -->
+  <div hidden aria-hidden="true">
+    <input id="damageNormalMax" type="number">
+    <input id="damageReplaceMin" type="number">
+    <input id="shapeSimilarityMin" type="number">
+    <input id="designSimilarityMin" type="number">
+    <input id="placementSimilarityMin" type="number">
+    <input id="rearGeometryMin" type="number">
+    <input id="rearSizeDifferenceMax" type="number">
+    <input id="colorDifferenceMax" type="number">
+
+    <input id="useDamage" type="checkbox">
+    <input id="useShape" type="checkbox">
+    <input id="useDesign" type="checkbox">
+    <input id="usePlacement" type="checkbox">
+    <input id="useRearGeometry" type="checkbox">
+    <input id="useColor" type="checkbox">
+
+    <div id="ruleSummary"></div>
+    <button id="resetRulesBtn" type="button">기본값 입력</button>
+    <button id="saveRulesBtn" type="button">판정기준 저장</button>
+    <div id="rulesMessage"></div>
+  </div>
 
 </section>
 </section>
