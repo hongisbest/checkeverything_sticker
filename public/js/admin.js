@@ -842,7 +842,7 @@ async function loadRules(){
     updateRuleSummary();
 
     $("rulesUpdatedAt").textContent=d.rules?.updated_at
-      ? `최근 저장 ${d.rules.updated_at}`
+      ? `최근 저장 ${formatKstDateTime(d.rules.updated_at)}`
       : "기본값";
 
     msg("rulesMessage","저장된 판정기준을 불러왔습니다.","success");
@@ -892,7 +892,7 @@ async function saveRules(){
     updateRuleSummary();
 
     $("rulesUpdatedAt").textContent=d.rules?.updated_at
-      ? `최근 저장 ${d.rules.updated_at}`
+      ? `최근 저장 ${formatKstDateTime(d.rules.updated_at)}`
       : "저장완료";
 
     msg("rulesMessage","저장 완료. 신규 점검부터 적용됩니다.","success");
@@ -988,7 +988,7 @@ async function loadInspections(){
                     ? "직원 화면에는 자동판정 결과 미노출 · 관리자 전용 결과"
                     : "기존 점검결과"}</span>
                   <span>${esc(findings.join(" / "))}</span>
-                  <span class="muted">${esc(x.created_at)}</span>
+                  <span class="muted">${esc(formatKstDateTime(x.created_at))}</span>
                 </div>
               </div>
 
@@ -1261,6 +1261,34 @@ function sideLabel(v){
     rear:"후면",
     front:"전면"
   })[v]||v;
+}
+
+function formatKstDateTime(value){
+  const raw=String(value||"").trim();
+  if(!raw)return "";
+
+  // D1/SQLite datetime('now') is UTC and returns "YYYY-MM-DD HH:mm:ss".
+  // Parse it explicitly as UTC, then display in Asia/Seoul.
+  const iso=/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
+    ? raw.replace(" ","T")+"Z"
+    : raw;
+
+  const d=new Date(iso);
+  if(Number.isNaN(d.getTime()))return raw;
+
+  const parts=new Intl.DateTimeFormat("sv-SE",{
+    timeZone:"Asia/Seoul",
+    year:"numeric",
+    month:"2-digit",
+    day:"2-digit",
+    hour:"2-digit",
+    minute:"2-digit",
+    second:"2-digit",
+    hour12:false
+  }).formatToParts(d);
+
+  const get=type=>parts.find(x=>x.type===type)?.value||"";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
 function msg(id,t,c){
