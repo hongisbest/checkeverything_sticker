@@ -140,6 +140,7 @@
     const sig=signature(v);
 
     if(registryVerified && sig===lastVerifiedSignature){
+      applyLegacySubmitCompatibility(true);
       return true;
     }
 
@@ -169,19 +170,7 @@
       lastVerifiedSignature=registryVerified ? sig : "";
       window.__vehicleRegistryVerified=registryVerified;
 
-      if(field("plateMatchConfirm")){
-        field("plateMatchConfirm").checked=registryVerified;
-      }
-
-      if(window.S){
-        S.plateMatchConfirmed=registryVerified;
-        S.plateOcrResult={
-          supported:true,
-          matched:registryVerified,
-          text:registryVerified ? "등록데이터 일치" : "등록데이터 불일치",
-          source:"vehicle-registry"
-        };
-      }
+      applyLegacySubmitCompatibility(registryVerified);
 
       if(box){
         box.className=registryVerified ? "message success" : "message error";
@@ -205,6 +194,24 @@
       }
 
       return false;
+    }
+  }
+
+  function applyLegacySubmitCompatibility(matched){
+    // V31에서는 STEP 01 등록데이터 완전일치가 기존 번호판 OCR 확인을 대체합니다.
+    // 사용자에게 추가 체크를 요구하지 않고 기존 check.js가 요구하는 내부값만 맞춥니다.
+    if(field("plateMatchConfirm")){
+      field("plateMatchConfirm").checked=matched===true;
+    }
+
+    if(window.S){
+      S.plateMatchConfirmed=matched===true;
+      S.plateOcrResult={
+        supported:true,
+        matched:matched===true,
+        text:matched ? "등록데이터 일치" : "등록데이터 불일치",
+        source:"vehicle-registry"
+      };
     }
   }
 
@@ -269,19 +276,7 @@
           : "등록 차량데이터와 입력정보가 일치하지 않습니다.";
     }
 
-    if(field("plateMatchConfirm")){
-      field("plateMatchConfirm").checked=ok;
-    }
-
-    if(window.S){
-      S.plateMatchConfirmed=ok;
-      S.plateOcrResult={
-        supported:true,
-        matched:ok,
-        text:ok ? "등록데이터 일치" : "등록데이터 불일치",
-        source:"vehicle-registry"
-      };
-    }
+    applyLegacySubmitCompatibility(ok);
   };
 
   window.showManualPlateFallback=function(){
@@ -299,6 +294,7 @@
       return;
     }
 
+    applyLegacySubmitCompatibility(true);
     return originalSubmitInspection(event);
   }
 
