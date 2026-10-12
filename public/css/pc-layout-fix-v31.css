@@ -1,0 +1,52 @@
+/* V31 PC hero/header layout fix
+   The original .hero flex container used the default align-items: stretch.
+   That stretched the badge to the full hero height on desktop and turned
+   the pill into a giant oval/circle. */
+
+.hero{
+  align-items:flex-start;
+}
+
+.hero > .badge,
+.hero-badge{
+  align-self:flex-start;
+  flex:0 0 auto;
+  width:auto;
+  min-width:0;
+  height:auto;
+  min-height:0;
+  padding:7px 11px;
+  border-radius:999px;
+  white-space:nowrap;
+  line-height:1;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:.06em;
+  color:#586474;
+  background:#fff;
+}
+
+/* Keep headings and text from being squeezed by the right badge. */
+.hero > div:first-child{
+  min-width:0;
+  flex:1 1 auto;
+}
+
+/* Desktop spacing: keep badge visually aligned with the top copy. */
+@media (min-width:601px){
+  .hero{
+    align-items:flex-start;
+  }
+
+  .hero-badge{
+    margin-top:2px;
+  }
+}
+
+/* Mobile keeps the stacked layout but the badge remains a normal pill. */
+@media (max-width:600px){
+  .hero-badge{
+    align-self:flex-start;
+    margin-top:0;
+  }
+}
