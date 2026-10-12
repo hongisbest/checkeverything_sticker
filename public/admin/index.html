@@ -34,6 +34,7 @@
 <aside class="card side-nav">
   <button class="btn primary" data-view="stickers">스티커 기준관리</button>
   <button class="btn" data-view="rules">판정기준 설정</button>
+  <button class="btn" data-view="vehicles">차량 데이터 관리</button>
   <button class="btn" data-view="results">점검결과</button>
   <button id="logoutBtn" class="btn">로그아웃</button>
 </aside>
@@ -113,98 +114,61 @@
   </div>
 
   <div class="message info" style="margin-bottom:14px">
-    현재 버전은 <b>필수기능의 안정성</b>을 우선합니다.
-    아래 4개 기준만 실제 자동점검에 사용하며,
-    손상률·디자인·크기·임의제작 여부는 최종판정에 사용하지 않습니다.
+    현재는 필수기능만 사용합니다. 향후 필요한 판정기준은 검증 후 별도로 추가합니다.
   </div>
 
   <div class="rules-grid">
-
     <div class="rule-card">
       <div class="rule-head">
         <div>
           <strong>① 스티커 유무</strong>
-          <span>선택한 차종의 정상예시 스티커 특징을 현재 차량사진 전체에서 직접 탐색합니다.</span>
+          <span>정상예시 스티커 특징을 현재 차량사진 전체에서 직접 탐색합니다.</span>
         </div>
         <span class="pill normal">사용 · 시스템 고정</span>
       </div>
       <p class="help">
-        정상예시 스티커와 충분한 특징점 일치가 확인되면 <b>스티커 있음</b>,
-        확인되지 않으면 <b>확인필요(미검출)</b>로 판정합니다.
-        번호판을 사용자가 어떻게 지정했는지는 스티커 유무 판정에 사용하지 않습니다.
+        정상예시와 충분한 특징점 일치가 확인되면 스티커 있음,
+        확인되지 않으면 확인필요(미검출)로 판정합니다.
       </p>
-      <div class="message info">
-        적용 기준: 특징점 정합 + RANSAC 일관성 검증
-        (유효 일치점 8개 이상 및 매칭 품질 기준 충족)
-      </div>
+      <div class="message info">특징점 정합 + RANSAC 일관성 검증</div>
     </div>
 
     <div class="rule-card">
       <div class="rule-head">
         <div>
           <strong>② 후면 좌우 위치</strong>
-          <span>후면 스티커가 검출된 경우 정상예시와 동일한 방향에 부착되었는지 확인합니다.</span>
+          <span>후면 스티커가 검출된 경우 정상예시와 같은 방향인지 확인합니다.</span>
         </div>
         <span class="pill normal">사용 · 시스템 고정</span>
       </div>
       <p class="help">
-        후면 정상 위치는 <b>오른쪽</b>입니다.
-        정상예시 차량사진과 현재사진을 자동 정렬하여 방향을 비교하고,
-        명확히 반대쪽이면 <b>확인필요</b>로 판정합니다.
+        정상 위치는 차량 후면 기준 오른쪽입니다.
+        오른쪽은 정상, 왼쪽은 확인필요, 좌우 확정 불가는 판정불가로 처리합니다.
       </p>
-      <div class="message info">
-        오른쪽 → 정상 / 왼쪽 → 확인필요 / 좌우 확정 불가 → 판정불가
-      </div>
     </div>
 
     <div class="rule-card">
       <div class="rule-head">
         <div>
-          <strong>③ 차량번호 OCR 대조</strong>
-          <span>사용자가 지정한 번호판 영역의 문자를 읽어 입력 차량번호와 비교합니다.</span>
+          <strong>③ 차량 등록데이터 대조</strong>
+          <span>사용자가 입력한 4개 정보가 관리자 차량데이터와 정확히 일치하는지 확인합니다.</span>
         </div>
-        <span class="pill normal">사용</span>
+        <span class="pill normal">필수</span>
       </div>
       <p class="help">
-        자동판독 결과가 입력 차량번호와 완전히 일치하면 자동으로 일치 처리합니다.
-        측면처럼 번호판 촬영각도가 큰 경우 OCR이 어려울 수 있으며,
-        OCR 결과는 스티커 유무 판정과 독립적으로 처리됩니다.
+        성명 · 사번 · 부서 · 차량번호가 모두 일치해야 점검사진을 제출할 수 있습니다.
+        부서는 관리자 등록데이터에서 자동 생성된 목록 중 선택합니다.
       </p>
-      <div class="message info">
-        완전일치 → 자동 확인 / 불일치·인식실패 → 육안확인
-      </div>
+      <div class="message info">4개 항목 완전일치 → 제출 가능 / 불일치 → 제출 차단</div>
     </div>
-
-    <div class="rule-card">
-      <div class="rule-head">
-        <div>
-          <strong>④ OCR 실패 시 육안확인</strong>
-          <span>자동판독이 불확실한 경우 확대 번호판을 사용자가 직접 대조합니다.</span>
-        </div>
-        <span class="pill normal">허용</span>
-      </div>
-      <p class="help">
-        OCR 실패만으로 제출을 막지 않습니다.
-        사용자가 촬영된 번호판과 입력 차량번호가 일치함을 직접 확인하면 제출할 수 있습니다.
-      </p>
-      <div class="message info">
-        OCR은 보조 확인기능이며 스티커 자동판정 결과를 변경하지 않습니다.
-      </div>
-    </div>
-
   </div>
 
   <div class="rule-summary">
     <strong>최종 자동판정 범위</strong>
     <div style="margin-top:8px">• 측면: 스티커 있음 → 정상 / 미검출 → 확인필요</div>
     <div>• 후면: 스티커 있음 + 오른쪽 → 정상 / 왼쪽 → 확인필요</div>
+    <div>• 사용자 정보: 등록 차량데이터 4개 항목 완전일치 필수</div>
     <div>• 분석 자체가 불확실한 경우 → 판정불가</div>
-  </div>
-
-  <div class="message info" style="margin-top:14px">
-    제외 기준: 구조 손상지수, 구조 보존율, 디자인 동일성, 기존 부착위치 유사도,
-    후면 크기차이, 색상차이, 임의제작 판정.
-    필요 시 향후 별도 기능으로 추가합니다.
   </div>
 
   <!-- 기존 관리자 JS/API 호환용 비표시 요소 -->
@@ -231,6 +195,129 @@
     <div id="rulesMessage"></div>
   </div>
 
+</section>
+
+</section>
+</section>
+
+<section id="vehiclesView" class="hidden">
+<section class="card">
+  <div class="section-head">
+    <div>
+      <span class="step">VEHICLE DATA</span>
+      <h2>차량 데이터 관리</h2>
+    </div>
+    <span id="vehicleDataCountBadge" class="badge">0건</span>
+  </div>
+
+  <div class="message info">
+    현재 점검에서는 <b>성명 · 사번 · 부서 · 차량번호</b> 4개 항목만 사용합니다.
+    엑셀에 다른 열이 있어도 무시하며, 업로드 시 필요한 4개 열만 선택합니다.
+  </div>
+
+  <div class="grid-2" style="margin-top:14px">
+    <div class="rule-card">
+      <strong>엑셀 데이터 넣기</strong>
+      <p class="help">.xlsx / .xls / .csv 파일의 첫 번째 시트를 읽습니다.</p>
+      <input id="vehicleExcelFile" type="file" accept=".xlsx,.xls,.csv">
+      <div id="vehicleImportFileInfo" class="message info" style="margin-top:8px">
+        파일을 선택하면 사용할 열을 확인합니다.
+      </div>
+
+      <div id="vehicleImportMapping" class="hidden" style="margin-top:10px">
+        <div class="grid-2">
+          <div class="form-group">
+            <label>성명 열 *</label>
+            <select id="mapEmployeeName"></select>
+          </div>
+          <div class="form-group">
+            <label>사번 열 *</label>
+            <select id="mapEmployeeId"></select>
+          </div>
+          <div class="form-group">
+            <label>부서 열 *</label>
+            <select id="mapDepartment"></select>
+          </div>
+          <div class="form-group">
+            <label>차량번호 열 *</label>
+            <select id="mapVehicleNo"></select>
+          </div>
+        </div>
+        <button id="applyVehicleImportBtn" class="btn primary" type="button" style="margin-top:10px">
+          선택한 4개 열 데이터 등록
+        </button>
+      </div>
+    </div>
+
+    <div class="rule-card">
+      <strong>데이터 다운로드</strong>
+      <p class="help">현재 저장된 차량 데이터를 엑셀(.xlsx)로 다운로드합니다.</p>
+      <button id="downloadVehicleDataBtn" class="btn secondary" type="button">전체 데이터 엑셀 다운로드</button>
+      <div id="vehicleExportMessage" class="message info" style="margin-top:8px">저장된 4개 항목을 내려받습니다.</div>
+    </div>
+  </div>
+
+  <div class="rule-card" style="margin-top:14px">
+    <strong>데이터 수기 입력</strong>
+    <div class="grid-2" style="margin-top:10px">
+      <div class="form-group"><label>성명 *</label><input id="manualEmployeeName" type="text"></div>
+      <div class="form-group"><label>사번 *</label><input id="manualEmployeeId" type="text"></div>
+      <div class="form-group"><label>부서 *</label><input id="manualDepartment" type="text"></div>
+      <div class="form-group"><label>차량번호 *</label><input id="manualVehicleNo" type="text"></div>
+    </div>
+    <button id="addVehicleDataBtn" class="btn primary" type="button" style="margin-top:10px">수기 데이터 등록</button>
+    <div id="manualVehicleMessage" class="message info" style="margin-top:8px">4개 항목은 모두 필수입니다.</div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="section-head">
+    <div>
+      <span class="step">DATA LIST</span>
+      <h2>저장된 차량 데이터</h2>
+    </div>
+    <span class="badge">15개씩 보기</span>
+  </div>
+
+  <div class="filter-row">
+    <input id="vehicleDataSearch" type="text" placeholder="성명 / 사번 / 부서 / 차량번호 통합검색">
+    <button id="vehicleDataSearchBtn" class="btn" type="button">검색</button>
+    <button id="vehicleDataResetBtn" class="btn" type="button">필터 초기화</button>
+  </div>
+
+  <div style="overflow-x:auto;margin-top:12px">
+    <table style="width:100%;border-collapse:collapse;min-width:880px">
+      <thead>
+        <tr>
+          <th><button class="btn small vehicle-sort-btn" data-sort="employee_name" type="button">성명 ↕</button></th>
+          <th><button class="btn small vehicle-sort-btn" data-sort="employee_id" type="button">사번 ↕</button></th>
+          <th><button class="btn small vehicle-sort-btn" data-sort="department" type="button">부서 ↕</button></th>
+          <th><button class="btn small vehicle-sort-btn" data-sort="vehicle_no" type="button">차량번호 ↕</button></th>
+          <th>관리</th>
+        </tr>
+        <tr>
+          <th><input id="filterVehicleName" type="text" placeholder="성명 필터"></th>
+          <th><input id="filterVehicleEmployeeId" type="text" placeholder="사번 필터"></th>
+          <th><input id="filterVehicleDepartment" type="text" placeholder="부서 필터"></th>
+          <th><input id="filterVehicleNo" type="text" placeholder="차량번호 필터"></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="vehicleDataTableBody">
+        <tr><td colspan="5">불러오는 중...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="submission-actions" style="margin-top:14px">
+    <button id="vehiclePrevPage" class="btn" type="button">이전</button>
+    <span id="vehiclePageInfo" class="badge">1 / 1</span>
+    <button id="vehicleNextPage" class="btn" type="button">다음</button>
+  </div>
+
+  <div id="vehicleDataListMessage" class="message info" style="margin-top:10px">
+    열 제목을 누르면 오름차순/내림차순으로 정렬합니다.
+  </div>
 </section>
 </section>
 
@@ -417,6 +504,8 @@
 </div>
 
 </main>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="/js/admin.js?v=20.0.0"></script>
+<script src="/js/admin-vehicle-data-v31.js?v=31.0.0"></script>
 </body>
 </html>
