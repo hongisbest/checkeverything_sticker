@@ -1,0 +1,30 @@
+.hero-actions{
+  display:flex;
+  align-items:flex-start;
+  justify-content:flex-end;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
+.install-app-btn{
+  min-height:30px;
+  padding:0 11px;
+  border-radius:999px;
+  background:#111d2e;
+  border-color:#111d2e;
+  color:#fff;
+  font-size:10px;
+  line-height:1;
+  white-space:nowrap;
+}
+
+.install-app-btn:hover{
+  opacity:.92;
+}
+
+@media(max-width:600px){
+  .hero-actions{
+    width:100%;
+    justify-content:flex-start;
+  }
+}

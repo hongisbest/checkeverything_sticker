@@ -1,0 +1,33 @@
+{
+  "id": "/check/",
+  "name": "BGF CHECK",
+  "short_name": "BGF CHECK",
+  "description": "법인차량 홍보스티커 셀프점검",
+  "lang": "ko-KR",
+  "start_url": "/check/",
+  "scope": "/check/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/icons/bgf-check-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/bgf-check-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/bgf-check-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

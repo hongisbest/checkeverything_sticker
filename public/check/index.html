@@ -3,9 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="BGF CHECK">
 <title>법인차량 홍보스티커 셀프점검</title>
 <link rel="stylesheet" href="/css/app.css?v=20.0.0">
 <link rel="stylesheet" href="/css/pc-layout-fix-v31.css?v=31.0.0">
+<link rel="stylesheet" href="/css/pwa-v32.css?v=32.0.0">
+<link rel="manifest" href="/check/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/bgf-check-apple-180.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/bgf-check-32.png">
 </head>
 <body>
 <main class="container">
@@ -17,7 +26,10 @@
     <h1>법인차량 홍보스티커 셀프점검</h1>
     <p class="sub">K3·아반떼·EV3 중 차종을 선택하면 해당 차종의 정상 예시사진만 기준으로 비교합니다. 차량은 흰색 기준이며 색상차이는 자동판정에서 제외합니다.</p>
   </div>
-  <span class="badge hero-badge">SELF INSPECTION</span>
+  <div class="hero-actions">
+    <span class="badge hero-badge">SELF INSPECTION</span>
+    <button id="installAppBtn" class="btn small install-app-btn" type="button">앱 설치</button>
+  </div>
 </section>
 
 <section class="card">
@@ -239,5 +251,6 @@
 <script src="/js/check.js?v=31.3.0"></script>
 <script src="/js/check-final-v30.js?v=30.1.0"></script>
 <script src="/js/check-vehicle-registry-v31.js?v=31.3.0"></script>
+<script src="/js/pwa-install-v32.js?v=32.0.0"></script>
 </body>
 </html>
