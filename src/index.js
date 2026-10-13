@@ -272,11 +272,12 @@ async function api(request, env, url) {
 
   // Results
   if (p === "/api/admin/inspections" && request.method === "GET") return listInspections(env, url);
+  if (p === "/api/admin/inspections/bulk-state" && request.method === "POST") return bulkCompleteInspections(request, env);
   if (p === "/api/admin/inspections/bulk-delete" && request.method === "POST") return bulkDeleteInspections(request, env);
   if (p === "/api/admin/export.csv" && request.method === "GET") return exportCsv(env);
 
   const inspectionImage = p.match(/^\/api\/admin\/inspections\/(\d+)\/image$/);
-  if (inspectionImage && request.method === "GET") return getInspectionImage(env, Number(inspectionImage[1]));
+  if (inspectionImage && request.method === "GET") return getInspectionImage(env, Number(inspectionImage[1]), url);
 
   const inspectionPatch = p.match(/^\/api\/admin\/inspections\/(\d+)$/);
   if (inspectionPatch && request.method === "PATCH") return updateInspection(request, env, Number(inspectionPatch[1]));
@@ -1728,10 +1729,51 @@ async function saveInspection(request, env) {
       ? await getInspectionReceiptNumber(env,Number(inserted.id))
       : "";
 
+    // 신규 사진은 R2에서도 접수번호.jpg로 정리합니다.
+    // 마이그레이션에 실패하더라도 이미 저장된 제출 자체는 유지하고
+    // 기존 임시 키를 그대로 사용해 접수 손실을 방지합니다.
+    let storedPhotoKey=key;
+
+    if(inserted?.id && receiptNo){
+      const receiptPhotoKey=`sticker-compare/inspection/${receiptNo}.jpg`;
+
+      try{
+        const tempObject=await env.STORAGE.get(key);
+
+        if(tempObject){
+          await env.STORAGE.put(receiptPhotoKey,tempObject.body,{
+            httpMetadata:{contentType:file.type || "image/jpeg"}
+          });
+
+          await env.DB.prepare(`
+            UPDATE st_inspections
+            SET photo_object_key=?
+            WHERE id=?
+          `).bind(receiptPhotoKey,Number(inserted.id)).run();
+
+          storedPhotoKey=receiptPhotoKey;
+
+          try{
+            await env.STORAGE.delete(key);
+          }catch(cleanupError){
+            console.warn("temporary inspection image cleanup failed",key,cleanupError);
+          }
+        }
+      }catch(renameError){
+        console.warn("receipt image rename failed; keeping original object key",renameError);
+
+        if(storedPhotoKey===key){
+          try{
+            await env.STORAGE.delete(receiptPhotoKey);
+          }catch{}
+        }
+      }
+    }
+
     let analysisToken="";
     if (inserted?.id && env.ADMIN_SESSION_SECRET) {
       analysisToken=await sign(
-        `inspection-analysis:${inserted.id}:${key}`,
+        `inspection-analysis:${inserted.id}:${storedPhotoKey}`,
         env.ADMIN_SESSION_SECRET
       );
     }
@@ -1856,6 +1898,59 @@ async function listInspections(env, url) {
 }
 
 
+async function bulkCompleteInspections(request, env) {
+  const body=await request.json().catch(()=>({}));
+  const rawIds=Array.isArray(body.ids)?body.ids:[];
+
+  const ids=[...new Set(
+    rawIds
+      .map(Number)
+      .filter(x=>Number.isInteger(x) && x>0)
+  )];
+
+  if(!ids.length){
+    return j({ok:false,error:"확인완료 처리할 점검결과를 먼저 선택해 주세요."},400);
+  }
+
+  if(ids.length>500){
+    return j({ok:false,error:"한 번에 최대 500건까지 처리할 수 있습니다."},400);
+  }
+
+  const placeholders=ids.map(()=>"?").join(",");
+
+  const eligible=await env.DB.prepare(`
+    SELECT id
+    FROM st_inspections
+    WHERE id IN (${placeholders})
+      AND status='정상'
+  `).bind(...ids).all();
+
+  const eligibleIds=(eligible.results||[]).map(x=>Number(x.id));
+
+  if(!eligibleIds.length){
+    return j({
+      ok:false,
+      error:"선택한 결과 중 자동판정 '정상' 항목이 없습니다."
+    },409);
+  }
+
+  const eligiblePlaceholders=eligibleIds.map(()=>"?").join(",");
+
+  await env.DB.prepare(`
+    UPDATE st_inspections
+    SET admin_state='확인완료'
+    WHERE id IN (${eligiblePlaceholders})
+      AND status='정상'
+  `).bind(...eligibleIds).run();
+
+  return j({
+    ok:true,
+    updated:eligibleIds.length,
+    skipped:ids.length-eligibleIds.length
+  });
+}
+
+
 async function bulkDeleteInspections(request, env) {
   const body = await request.json().catch(()=>({}));
   const rawIds = Array.isArray(body.ids) ? body.ids : [];
@@ -1925,10 +2020,13 @@ async function bulkDeleteInspections(request, env) {
   });
 }
 
-async function getInspectionImage(env, id) {
-  const row = await env.DB.prepare(
-    "SELECT photo_object_key FROM st_inspections WHERE id=?"
-  ).bind(id).first();
+async function getInspectionImage(env, id, url) {
+  const row = await env.DB.prepare(`
+    SELECT i.photo_object_key,r.receipt_no
+    FROM st_inspections i
+    LEFT JOIN st_inspection_receipts r ON r.inspection_id=i.id
+    WHERE i.id=?
+  `).bind(id).first();
 
   if (!row) return new Response("Not Found",{status:404});
 
@@ -1938,6 +2036,16 @@ async function getInspectionImage(env, id) {
   const h = new Headers();
   object.writeHttpMetadata(h);
   h.set("cache-control","private,max-age=60");
+
+  if(url?.searchParams?.get("download")==="1"){
+    const safeReceipt=String(row.receipt_no||`inspection-${id}`)
+      .replace(/[^0-9A-Za-z_-]/g,"_");
+
+    h.set(
+      "content-disposition",
+      `attachment; filename="${safeReceipt}.jpg"`
+    );
+  }
 
   return new Response(object.body,{headers:h});
 }

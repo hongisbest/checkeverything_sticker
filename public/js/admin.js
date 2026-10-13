@@ -85,6 +85,7 @@ function bind(){
 
   $("searchBtn").onclick=loadInspections;
   $("selectAllInspections").onchange=toggleSelectAllInspections;
+  $("completeSelectedBtn").onclick=completeSelectedInspections;
   $("deleteSelectedBtn").onclick=deleteSelectedInspections;
 
   document.querySelectorAll("[data-view]").forEach(b=>{
@@ -994,6 +995,10 @@ async function loadInspections(){
               </div>
 
               <div class="detail-actions">
+                <a
+                  class="btn small secondary"
+                  href="/api/admin/inspections/${x.id}/image?download=1"
+                >사진 다운로드</a>
                 <select id="state-${x.id}">
                   ${["미확인","확인완료","개선요청","조치완료"].map(v=>`
                     <option ${x.admin_state===v?"selected":""}>${v}</option>
@@ -1062,6 +1067,8 @@ function updateInspectionSelectionUI(){
   const total=S.inspectionItems.length;
 
   $("selectedCountText").textContent=`선택 ${selectedCount}건`;
+  $("completeSelectedBtn").textContent=`선택 확인완료 (${selectedCount})`;
+  $("completeSelectedBtn").disabled=selectedCount===0;
   $("deleteSelectedBtn").textContent=`선택 삭제 (${selectedCount})`;
   $("deleteSelectedBtn").disabled=selectedCount===0;
 
@@ -1081,6 +1088,58 @@ function updateInspectionSelectionUI(){
     cb.checked=S.selectedInspectionIds.has(Number(cb.value));
   });
 }
+
+async function completeSelectedInspections(){
+  const ids=[...S.selectedInspectionIds];
+
+  if(!ids.length){
+    alert("확인완료 처리할 점검결과를 먼저 선택해 주세요.");
+    return;
+  }
+
+  const normalCount=S.inspectionItems.filter(
+    x=>S.selectedInspectionIds.has(Number(x.id)) && x.status==="정상"
+  ).length;
+
+  if(!normalCount){
+    alert("선택한 결과 중 자동판정 '정상' 항목이 없습니다.");
+    return;
+  }
+
+  const confirmed=confirm(
+    `선택한 결과 중 자동판정 '정상' ${normalCount}건을 관리상태 '확인완료'로 변경합니다.\n\n`+
+    `계속하시겠습니까?`
+  );
+
+  if(!confirmed)return;
+
+  $("completeSelectedBtn").disabled=true;
+  $("completeSelectedBtn").textContent="처리 중...";
+
+  try{
+    const r=await fetchTimeout("/api/admin/inspections/bulk-state",{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({ids})
+    },30000);
+
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||"확인완료 처리 실패");
+
+    let text=`자동판정 정상 ${Number(d.updated||0)}건을 확인완료로 변경했습니다.`;
+
+    if(Number(d.skipped||0)>0){
+      text+=`\n정상이 아닌 ${Number(d.skipped||0)}건은 변경하지 않았습니다.`;
+    }
+
+    alert(text);
+    await loadInspections();
+  }catch(e){
+    alert(`확인완료 처리에 실패했습니다.\n${e.message}`);
+    updateInspectionSelectionUI();
+  }
+}
+
 
 async function deleteSelectedInspections(){
   const ids=[...S.selectedInspectionIds];
