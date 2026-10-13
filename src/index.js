@@ -170,7 +170,20 @@ function ensureSchema(env) {
       )`),
       env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_department ON st_vehicle_registry(department_key)"),
       env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_name ON st_vehicle_registry(employee_name_key)"),
-      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_vehicle ON st_vehicle_registry(vehicle_no_key)")
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_vehicle ON st_vehicle_registry(vehicle_no_key)"),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_receipt_sequences (
+        receipt_year INTEGER PRIMARY KEY,
+        last_seq INTEGER NOT NULL DEFAULT 0
+      )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_inspection_receipts (
+        inspection_id INTEGER PRIMARY KEY,
+        receipt_year INTEGER NOT NULL,
+        receipt_seq INTEGER NOT NULL,
+        receipt_no TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(receipt_year,receipt_seq)
+      )`),
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_inspection_receipts_year_seq ON st_inspection_receipts(receipt_year,receipt_seq)")
     ]).catch(e => {
       schemaPromise = null;
       throw e;
@@ -1532,6 +1545,90 @@ async function saveAnalysisCache(request, env) {
   return j({ok:true});
 }
 
+
+async function getInspectionReceiptNumber(env, inspectionId) {
+  const existing=await env.DB.prepare(`
+    SELECT receipt_no
+    FROM st_inspection_receipts
+    WHERE inspection_id=?
+  `).bind(inspectionId).first();
+
+  if(existing?.receipt_no)return String(existing.receipt_no);
+
+  const inspection=await env.DB.prepare(`
+    SELECT
+      id,
+      CAST(strftime('%Y', datetime(created_at, '+9 hours')) AS INTEGER) AS receipt_year
+    FROM st_inspections
+    WHERE id=?
+  `).bind(inspectionId).first();
+
+  if(!inspection?.id || !inspection?.receipt_year)return "";
+
+  const year=Number(inspection.receipt_year);
+
+  for(let attempt=0;attempt<5;attempt++){
+    const seqRow=await env.DB.prepare(`
+      INSERT INTO st_receipt_sequences(receipt_year,last_seq)
+      VALUES(?,1)
+      ON CONFLICT(receipt_year) DO UPDATE SET
+        last_seq=last_seq+1
+      RETURNING last_seq
+    `).bind(year).first();
+
+    const seq=Number(seqRow?.last_seq||0);
+    if(!seq)continue;
+
+    const receiptNo=`${year}-${String(seq).padStart(3,"0")}`;
+
+    try{
+      await env.DB.prepare(`
+        INSERT INTO st_inspection_receipts(
+          inspection_id,receipt_year,receipt_seq,receipt_no
+        ) VALUES(?,?,?,?)
+      `).bind(inspectionId,year,seq,receiptNo).run();
+
+      return receiptNo;
+    }catch(error){
+      const raced=await env.DB.prepare(`
+        SELECT receipt_no
+        FROM st_inspection_receipts
+        WHERE inspection_id=?
+      `).bind(inspectionId).first();
+
+      if(raced?.receipt_no)return String(raced.receipt_no);
+
+      console.warn("receipt allocation retry",inspectionId,attempt+1,error);
+    }
+  }
+
+  throw new Error("접수번호 생성에 실패했습니다.");
+}
+
+async function ensureExistingInspectionReceipts(env) {
+  // 최초 적용 시 기존 점검자료도 오래된 순서대로 2026-001부터 부여합니다.
+  // 이후 번호는 삭제 여부와 관계없이 재사용하지 않습니다.
+  for(let batch=0;batch<20;batch++){
+    const missing=await env.DB.prepare(`
+      SELECT i.id
+      FROM st_inspections i
+      LEFT JOIN st_inspection_receipts r ON r.inspection_id=i.id
+      WHERE r.inspection_id IS NULL
+      ORDER BY datetime(i.created_at) ASC, i.id ASC
+      LIMIT 250
+    `).all();
+
+    const rows=missing.results||[];
+    if(!rows.length)break;
+
+    for(const row of rows){
+      await getInspectionReceiptNumber(env,Number(row.id));
+    }
+
+    if(rows.length<250)break;
+  }
+}
+
 async function saveInspection(request, env) {
   const form = await request.formData();
   const file = form.get("file");
@@ -1581,6 +1678,8 @@ async function saveInspection(request, env) {
     },409);
   }
 
+  await ensureExistingInspectionReceipts(env);
+
   const key = `sticker-compare/inspection/${Date.now()}-${crypto.randomUUID()}.jpg`;
 
   try {
@@ -1625,6 +1724,10 @@ async function saveInspection(request, env) {
       JSON.stringify(meta.metrics && typeof meta.metrics==="object" ? meta.metrics : {})
     ).first();
 
+    const receiptNo=inserted?.id
+      ? await getInspectionReceiptNumber(env,Number(inserted.id))
+      : "";
+
     let analysisToken="";
     if (inserted?.id && env.ADMIN_SESSION_SECRET) {
       analysisToken=await sign(
@@ -1636,6 +1739,7 @@ async function saveInspection(request, env) {
     return j({
       ok:true,
       id:inserted?.id,
+      receipt_no:receiptNo,
       analysis_token:analysisToken
     });
   } catch (e) {
@@ -1707,6 +1811,8 @@ async function updateSubmittedInspectionAnalysis(request, env, id) {
 }
 
 async function listInspections(env, url) {
+  await ensureExistingInspectionReceipts(env);
+
   const q = txt(url.searchParams.get("q"),100);
   const status = txt(url.searchParams.get("status"),20);
   const state = txt(url.searchParams.get("admin_state"),20);
@@ -1725,19 +1831,20 @@ async function listInspections(env, url) {
   }
 
   if (q) {
-    where.push("(i.employee_name LIKE ? OR i.vehicle_no LIKE ? OR i.department LIKE ? OR s.name LIKE ?)");
+    where.push("(i.employee_name LIKE ? OR i.vehicle_no LIKE ? OR i.department LIKE ? OR s.name LIKE ? OR r.receipt_no LIKE ?)");
     const value = `%${q}%`;
-    bind.push(value,value,value,value);
+    bind.push(value,value,value,value,value);
   }
 
   const sql = `
-    SELECT i.id,i.employee_name,i.employee_id,i.department,i.vehicle_no,i.sticker_id,
+    SELECT i.id,r.receipt_no,i.employee_name,i.employee_id,i.department,i.vehicle_no,i.sticker_id,
            i.crop_x,i.crop_y,i.crop_width,i.crop_height,i.sticker_missing,
            i.score,i.status,i.findings_json,i.metrics_json,
            i.admin_state,i.admin_note,i.created_at,
            s.name sticker_name,s.version sticker_version
     FROM st_inspections i
     LEFT JOIN st_stickers s ON s.id=i.sticker_id
+    LEFT JOIN st_inspection_receipts r ON r.inspection_id=i.id
     ${where.length ? "WHERE "+where.join(" AND ") : ""}
     ORDER BY i.id DESC
     LIMIT 500
@@ -1784,10 +1891,16 @@ async function bulkDeleteInspections(request, env) {
   // Delete DB records first in a single D1 statement.
   // If an R2 object cleanup fails afterwards, the user-visible inspection
   // record is still removed and orphan cleanup can be retried later.
-  await env.DB.prepare(`
-    DELETE FROM st_inspections
-    WHERE id IN (${placeholders})
-  `).bind(...ids).run();
+  await env.DB.batch([
+    env.DB.prepare(`
+      DELETE FROM st_inspection_receipts
+      WHERE inspection_id IN (${placeholders})
+    `).bind(...ids),
+    env.DB.prepare(`
+      DELETE FROM st_inspections
+      WHERE id IN (${placeholders})
+    `).bind(...ids)
+  ]);
 
   let deletedImages=0;
   let imageDeleteFailed=0;
@@ -1844,17 +1957,20 @@ async function updateInspection(request, env, id) {
 }
 
 async function exportCsv(env) {
+  await ensureExistingInspectionReceipts(env);
+
   const r = await env.DB.prepare(`
-    SELECT i.id,i.created_at,i.employee_name,i.employee_id,i.department,i.vehicle_no,
+    SELECT i.id,r.receipt_no,i.created_at,i.employee_name,i.employee_id,i.department,i.vehicle_no,
            s.name sticker_name,s.version sticker_version,
            i.sticker_missing,i.score,i.status,i.findings_json,i.admin_state,i.admin_note
     FROM st_inspections i
     LEFT JOIN st_stickers s ON s.id=i.sticker_id
+    LEFT JOIN st_inspection_receipts r ON r.inspection_id=i.id
     ORDER BY i.id DESC
   `).all();
 
   const rows = [[
-    "ID","점검일시","성명","사번","부서","차량번호",
+    "접수번호","ID","점검일시","성명","사번","부서","차량번호",
     "스티커종류","버전","스티커미확인","점수","자동판정","검증항목","관리상태","관리자메모"
   ]];
 
@@ -1863,7 +1979,7 @@ async function exportCsv(env) {
     try { findings = JSON.parse(x.findings_json || "[]"); } catch {}
 
     rows.push([
-      x.id,x.created_at,x.employee_name,x.employee_id,x.department,x.vehicle_no,
+      x.receipt_no||"",x.id,x.created_at,x.employee_name,x.employee_id,x.department,x.vehicle_no,
       x.sticker_name || "",x.sticker_version || "",
       Number(x.sticker_missing)===1 ? "Y" : "N",
       Number(x.score).toFixed(1),x.status,findings.join(" / "),
