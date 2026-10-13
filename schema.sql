@@ -167,3 +167,22 @@ ON st_vehicle_registry(employee_name_key);
 
 CREATE INDEX IF NOT EXISTS idx_st_vehicle_registry_vehicle
 ON st_vehicle_registry(vehicle_no_key);
+
+-- 연도별 접수번호
+-- 예: 2026-001, 2026-002 ... / 다음 해에는 2027-001부터 새로 시작
+CREATE TABLE IF NOT EXISTS st_receipt_sequences (
+  receipt_year INTEGER PRIMARY KEY,
+  last_seq INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS st_inspection_receipts (
+  inspection_id INTEGER PRIMARY KEY,
+  receipt_year INTEGER NOT NULL,
+  receipt_seq INTEGER NOT NULL,
+  receipt_no TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(receipt_year, receipt_seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_st_inspection_receipts_year_seq
+ON st_inspection_receipts(receipt_year, receipt_seq);
