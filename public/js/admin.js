@@ -955,6 +955,7 @@ async function loadInspections(){
                   onclick="openImage('/api/admin/inspections/${x.id}/image')"
                 >
                 <div class="inspection-meta">
+                  <span><b>접수번호 ${esc(x.receipt_no||"-")}</b></span>
                   <strong>${esc(x.vehicle_no)} · ${esc(x.employee_name)}</strong>
                   <span>${esc(x.department||"-")} · ${esc(x.sticker_name||"-")} v${esc(x.sticker_version||"-")}</span>
                   <span>차종 ${vehicleLabel(metrics.vehicleType||"")||"미기록"}</span>
