@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const FINAL_ENGINE="final-presence-v1";
+  const FINAL_ENGINE="final-presence-v2-multireference";
   const PLATE_HANGUL=
     "가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호";
 
@@ -20,11 +20,15 @@
   // 최종판정에 사용하지 않습니다.
 
   window.analyzeSnapshotAgainstMasterAndExamples=async function(snapshot,examples){
-    const example=(examples||[]).find(x=>
+    const vehicleExamples=(examples||[]).filter(x=>
       x?.calibrated && x?.vehicle_type===snapshot?.vehicleType
-    ) || (examples||[]).find(x=>x?.calibrated);
+    );
 
-    if(!example){
+    const candidateExamples=vehicleExamples.length
+      ? vehicleExamples
+      : (examples||[]).filter(x=>x?.calibrated);
+
+    if(!candidateExamples.length){
       return finalUnavailable(
         "동일 차종 정상예시의 스티커 기준영역을 불러오지 못했습니다."
       );
@@ -38,39 +42,62 @@
       );
     }
 
-    let referenceImage=null;
-
     try{
-      referenceImage=await loadImage(example.image_url);
+      let best=null;
 
-      const referenceStickerBox={
-        x:Number(example.crop_x),
-        y:Number(example.crop_y),
-        width:Number(example.crop_width),
-        height:Number(example.crop_height)
-      };
+      // 동일 차종 정상예시를 모두 시도합니다.
+      // 한 장의 예시 각도에만 종속되지 않도록 가장 강한 정합 결과를 사용합니다.
+      for(const example of candidateExamples){
+        let referenceImage=null;
 
-      if(!validBox(referenceStickerBox)){
+        try{
+          referenceImage=await loadImage(example.image_url);
+
+          const referenceStickerBox={
+            x:Number(example.crop_x),
+            y:Number(example.crop_y),
+            width:Number(example.crop_width),
+            height:Number(example.crop_height)
+          };
+
+          if(!validBox(referenceStickerBox))continue;
+
+          const referenceSticker=cropBoxCanvas(
+            referenceImage,
+            referenceStickerBox,
+            1200
+          );
+
+          const presence=orbLocateObject(
+            referenceSticker,
+            snapshot.photoImage
+          );
+
+          const rank=
+            (presence.pass ? 100000 : 0)+
+            Number(presence.inliers||0)*120+
+            Number(presence.goodMatches||0)*8-
+            Math.min(999,Number(presence.topMeanDistance||999))*2;
+
+          if(!best || rank>best.rank){
+            best={example,referenceImage,presence,rank};
+          }
+        }catch(error){
+          console.warn("normal example matching failed",error);
+        }
+      }
+
+      if(!best){
         return finalUnavailable(
-          "정상예시 스티커 기준영역이 올바르게 설정되지 않았습니다."
+          "정상예시 스티커 기준영역을 이용한 분석을 수행하지 못했습니다."
         );
       }
 
-      const referenceSticker=cropBoxCanvas(
-        referenceImage,
-        referenceStickerBox,
-        1200
-      );
-
-      // 핵심: 현재 사진 전체에서 정상예시 스티커의 특징점을 직접 찾습니다.
-      // 사용자의 번호판 박스는 스티커 존재 검출에 사용하지 않습니다.
-      const presence=orbLocateObject(
-        referenceSticker,
-        snapshot.photoImage
-      );
+      const {example,referenceImage,presence}=best;
 
       const metrics={
         finalPresenceV1:true,
+        finalPresenceV2:true,
         analysisEngine:FINAL_ENGINE,
         vehicleType:snapshot.vehicleType,
         sideHint:snapshot.sticker.side_hint,
@@ -78,9 +105,12 @@
         missing:presence.pass!==true,
         presenceInliers:presence.inliers,
         presenceGoodMatches:presence.goodMatches,
+        presenceInlierRatio:round1((presence.inlierRatio||0)*100),
         presenceTopMeanDistance:round1(presence.topMeanDistance),
         presenceReferenceKeypoints:presence.referenceKeypoints,
         presencePhotoKeypoints:presence.photoKeypoints,
+        presenceSearchMaxSide:presence.searchMaxSide||null,
+        presenceReferenceAttempts:candidateExamples.length,
         detectedStickerCenter:presence.center||null,
         rearPosition:"not-applicable",
         rearPositionMethod:null,
@@ -102,14 +132,13 @@
             status:"확인필요",
             recommendation:"미부착 여부 확인",
             findings:[
-              "스티커 미검출 → 정상예시 스티커의 특징점이 현재 사진에서 충분히 확인되지 않았습니다."
+              "스티커 미검출 → 동일 차종 정상예시들을 여러 크기로 비교했으나 충분한 특징점 정합이 확인되지 않았습니다."
             ],
             metrics
           }
         };
       }
 
-      // 측면은 존재 확인만으로 정상 처리.
       if(snapshot.sticker.side_hint!=="rear"){
         return{
           crop:null,
@@ -118,7 +147,7 @@
             status:"정상",
             recommendation:"",
             findings:[
-              "스티커 검출 → 정상예시 스티커 특징이 현재 사진에서 확인되었습니다."
+              "스티커 검출 → 동일 차종 정상예시 중 하나와 안정적인 특징점 정합이 확인되었습니다."
             ],
             metrics:{
               ...metrics,
@@ -128,7 +157,6 @@
         };
       }
 
-      // 후면은 좌우 위치가 필수.
       const rear=await determineRearSide(
         snapshot,
         example,
@@ -196,8 +224,56 @@
   };
 
   function orbLocateObject(referenceCanvas,photoImage){
-    const photo=fitImageToMaxSide(photoImage,1400);
-    const ref=fitCanvasMaxSide(referenceCanvas,800);
+    // 멀리서 촬영된 차량에서 스티커가 작게 보이는 경우를 위해
+    // 동일 사진을 여러 해상도로 탐색합니다. 첫 단계가 통과하면 즉시 종료해
+    // 일반적인 사진의 처리시간 증가는 최소화합니다.
+    const searchSizes=[1400,1920,2400];
+    let best=null;
+
+    for(const maxSide of searchSizes){
+      const result=orbLocateObjectAtScale(
+        referenceCanvas,
+        photoImage,
+        maxSide
+      );
+
+      const rank=
+        (result.pass ? 100000 : 0)+
+        Number(result.inliers||0)*120+
+        Number(result.goodMatches||0)*8-
+        Math.min(999,Number(result.topMeanDistance||999))*2;
+
+      if(!best || rank>best.rank){
+        best={...result,rank};
+      }
+
+      if(result.pass){
+        return result;
+      }
+    }
+
+    if(best){
+      delete best.rank;
+      return best;
+    }
+
+    return{
+      pass:false,
+      inliers:0,
+      goodMatches:0,
+      inlierRatio:0,
+      topMeanDistance:999,
+      referenceKeypoints:0,
+      photoKeypoints:0,
+      confidence:0,
+      center:null,
+      searchMaxSide:null
+    };
+  }
+
+  function orbLocateObjectAtScale(referenceCanvas,photoImage,targetMaxSide){
+    const photo=fitImageToTargetMaxSide(photoImage,targetMaxSide);
+    const ref=fitCanvasMaxSide(referenceCanvas,900);
 
     let src=null,dst=null,g1=null,g2=null;
     let mask1=null,mask2=null,kp1=null,kp2=null;
@@ -220,7 +296,9 @@
       des1=new cv.Mat();
       des2=new cv.Mat();
 
-      orb=new cv.ORB(2500);
+      // 복잡한 배경에서 작은 스티커 특징점이 상위 2,500개 밖으로
+      // 밀려나는 문제를 줄이기 위해 특징점 수를 늘립니다.
+      orb=new cv.ORB(6000);
       orb.detectAndCompute(g1,mask1,kp1,des1);
       orb.detectAndCompute(g2,mask2,kp2,des2);
 
@@ -228,7 +306,7 @@
       const photoKeypoints=kp2.size();
 
       if(
-        referenceKeypoints<20 ||
+        referenceKeypoints<16 ||
         photoKeypoints<30 ||
         des1.empty() ||
         des2.empty()
@@ -237,11 +315,13 @@
           pass:false,
           inliers:0,
           goodMatches:0,
+          inlierRatio:0,
           topMeanDistance:999,
           referenceKeypoints,
           photoKeypoints,
           confidence:0,
-          center:null
+          center:null,
+          searchMaxSide:targetMaxSide
         };
       }
 
@@ -258,19 +338,16 @@
 
         if(!Number.isFinite(d))continue;
 
-        all.push({
+        const item={
           distance:d,
           queryIdx:Number(m.queryIdx),
           trainIdx:Number(m.trainIdx)
-        });
+        };
 
-        if(d<55){
-          good.push({
-            distance:d,
-            queryIdx:Number(m.queryIdx),
-            trainIdx:Number(m.trainIdx)
-          });
-        }
+        all.push(item);
+
+        // 기존 55보다 약간 넓게 후보를 받아 RANSAC에서 다시 검증합니다.
+        if(d<62)good.push(item);
       }
 
       all.sort((a,b)=>a.distance-b.distance);
@@ -285,11 +362,13 @@
           pass:false,
           inliers:0,
           goodMatches:good.length,
+          inlierRatio:0,
           topMeanDistance,
           referenceKeypoints,
           photoKeypoints,
           confidence:0,
-          center:null
+          center:null,
+          searchMaxSide:targetMaxSide
         };
       }
 
@@ -338,6 +417,8 @@
         }
       }
 
+      const inlierRatio=inliers/Math.max(1,good.length);
+
       const center=inlierPoints.length
         ? [
             median(inlierPoints.map(x=>x[0])),
@@ -345,16 +426,28 @@
           ]
         : null;
 
-      // 실제 사용자 샘플 + 밝기/블러/JPEG 시뮬레이션으로 고정.
-      const pass=
+      // 기존 강한 기준은 유지합니다.
+      const strictPass=
         inliers>=8 &&
         topMeanDistance<=39.0 &&
         Boolean(center);
 
+      // 작은/비스듬한 스티커는 descriptor 거리가 조금 늘어날 수 있으므로,
+      // 더 많은 RANSAC 일치점과 충분한 일치비율이 있을 때만 보조 허용합니다.
+      const perspectivePass=
+        inliers>=10 &&
+        good.length>=12 &&
+        inlierRatio>=.28 &&
+        topMeanDistance<=45.0 &&
+        Boolean(center);
+
+      const pass=strictPass||perspectivePass;
+
       const confidence=pass
         ? clamp(
-            (Math.min(24,inliers)/24)*65+
-            clamp((45-topMeanDistance)/15,0,1)*35,
+            (Math.min(24,inliers)/24)*55+
+            clamp((50-topMeanDistance)/18,0,1)*25+
+            clamp(inlierRatio/.55,0,1)*20,
             0,100
           )
         : 0;
@@ -363,11 +456,13 @@
         pass,
         inliers,
         goodMatches:good.length,
+        inlierRatio,
         topMeanDistance,
         referenceKeypoints,
         photoKeypoints,
         confidence,
-        center
+        center,
+        searchMaxSide:targetMaxSide
       };
 
     }finally{
@@ -378,6 +473,32 @@
         try{obj?.delete?.();}catch{}
       }
     }
+  }
+
+  function fitImageToTargetMaxSide(image,targetMaxSide){
+    const w=Number(image.naturalWidth||image.width||0);
+    const h=Number(image.naturalHeight||image.height||0);
+
+    if(!w||!h){
+      return fitImageToMaxSide(image,targetMaxSide);
+    }
+
+    // 최대 1.25배까지만 업스케일합니다.
+    // 원본 픽셀을 과도하게 부풀려 가짜 특징점을 만드는 것을 방지합니다.
+    const nativeMax=Math.max(w,h);
+    const requested=Math.max(1,Number(targetMaxSide)||1400);
+    const scale=Math.min(1.25,requested/nativeMax);
+
+    const c=document.createElement("canvas");
+    c.width=Math.max(1,Math.round(w*scale));
+    c.height=Math.max(1,Math.round(h*scale));
+
+    const ctx=c.getContext("2d");
+    ctx.imageSmoothingEnabled=true;
+    ctx.imageSmoothingQuality="high";
+    ctx.drawImage(image,0,0,c.width,c.height);
+
+    return{canvas:c,scale};
   }
 
   async function determineRearSide(snapshot,example,referenceImage,stickerCenter){
