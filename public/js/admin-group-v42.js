@@ -12,14 +12,25 @@
     .replace(/"/g,"&quot;");
 
   window.loadVehicleGroupInspections=loadGroups;
-  window.saveVehicleGroupInspection=saveGroup;
-  window.toggleVehicleGroupSelection=toggleSelection;
 
   document.addEventListener("DOMContentLoaded",()=>{
     $("groupSelectAll")?.addEventListener("change",toggleAll);
     $("groupCompleteSelectedBtn")?.addEventListener("click",bulkComplete);
     $("groupDeleteSelectedBtn")?.addEventListener("click",bulkDelete);
 
+    const list=$("vehicleInspectionList");
+
+    list?.addEventListener("change",event=>{
+      const checkbox=event.target.closest(".vehicle-group-checkbox");
+      if(!checkbox)return;
+      toggleVehicleGroupSelection(Number(checkbox.value),checkbox.checked);
+    });
+
+    list?.addEventListener("click",event=>{
+      const saveBtn=event.target.closest("[data-group-save-id]");
+      if(!saveBtn)return;
+      saveVehicleGroupInspection(Number(saveBtn.dataset.groupSaveId));
+    });
   });
 
   async function loadGroups(){
@@ -68,7 +79,6 @@
               class="vehicle-group-checkbox"
               type="checkbox"
               value="${x.id}"
-              onchange="toggleVehicleGroupSelection(${x.id},this.checked)"
             >
           </label>
 
@@ -97,7 +107,7 @@
             `).join("")}
           </select>
           <textarea id="groupNote-${x.id}" placeholder="관리자 메모">${esc(x.admin_note||"")}</textarea>
-          <button class="btn primary small" onclick="saveVehicleGroupInspection(${x.id})">저장</button>
+          <button class="btn primary small" type="button" data-group-save-id="${x.id}">저장</button>
         </div>
       </article>
     `;
@@ -171,51 +181,78 @@
 
   async function bulkComplete(){
     const ids=[...selected];
-    if(!ids.length)return;
+    if(!ids.length){
+      alert("확인완료 처리할 차량 점검결과를 선택해 주세요.");
+      return;
+    }
 
     if(!confirm(
       `선택한 ${ids.length}대의 차량 점검을 자동판정 결과와 관계없이 '확인완료'로 변경합니다.\\n\\n`+
       `관리자가 3개 촬영면을 직접 확인했는지 확인해 주세요.`
     ))return;
 
-    const r=await fetch("/api/admin/vehicle-inspections/bulk-state",{
-      method:"POST",
-      headers:{"content-type":"application/json"},
-      body:JSON.stringify({ids})
-    });
-    const d=await r.json();
-
-    if(!r.ok){
-      alert(d.error||"확인완료 처리 실패");
-      return;
+    const btn=$("groupCompleteSelectedBtn");
+    if(btn){
+      btn.disabled=true;
+      btn.textContent="처리 중...";
     }
 
-    alert(`${Number(d.updated||0)}건을 확인완료로 변경했습니다.`);
-    await loadGroups();
+    try{
+      const r=await fetch("/api/admin/vehicle-inspections/bulk-state",{
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({ids})
+      });
+      const d=await r.json();
+
+      if(!r.ok)throw new Error(d.error||"확인완료 처리 실패");
+
+      alert(`${Number(d.updated||0)}건을 확인완료로 변경했습니다.`);
+      await loadGroups();
+    }catch(e){
+      alert(`확인완료 처리에 실패했습니다.\n${e.message}`);
+      updateSelectionUi();
+    }
   }
 
   async function bulkDelete(){
     const ids=[...selected];
-    if(!ids.length)return;
+    if(!ids.length){
+      alert("삭제할 차량 점검결과를 선택해 주세요.");
+      return;
+    }
 
     if(!confirm(
       `선택한 ${ids.length}대의 통합 점검결과와 운전석·조수석·후면 사진 3장이 모두 삭제됩니다.\\n복구할 수 없습니다.`
     ))return;
 
-    const r=await fetch("/api/admin/vehicle-inspections/bulk-delete",{
-      method:"POST",
-      headers:{"content-type":"application/json"},
-      body:JSON.stringify({ids})
-    });
-    const d=await r.json();
-
-    if(!r.ok){
-      alert(d.error||"삭제 실패");
-      return;
+    const btn=$("groupDeleteSelectedBtn");
+    if(btn){
+      btn.disabled=true;
+      btn.textContent="삭제 중...";
     }
 
-    alert(`${Number(d.deleted||0)}건을 삭제했습니다.`);
-    await loadGroups();
+    try{
+      const r=await fetch("/api/admin/vehicle-inspections/bulk-delete",{
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({ids})
+      });
+      const d=await r.json();
+
+      if(!r.ok)throw new Error(d.error||"삭제 실패");
+
+      let message=`${Number(d.deleted||0)}건을 삭제했습니다.`;
+      if(Number(d.image_delete_failed||0)>0){
+        message+=`\n사진 ${Number(d.image_delete_failed)}건의 저장소 정리에 실패했습니다.`;
+      }
+
+      alert(message);
+      await loadGroups();
+    }catch(e){
+      alert(`삭제에 실패했습니다.\n${e.message}`);
+      updateSelectionUi();
+    }
   }
 
   function updateSelectionUi(){

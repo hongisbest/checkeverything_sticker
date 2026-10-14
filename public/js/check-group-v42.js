@@ -448,8 +448,10 @@
       G.analysisRunning=true;
       updateSubmitState();
 
+      const inspectionId=Number(uploadSession.id);
+
       setTimeout(
-        ()=>runBackgroundAnalysis(uploadSession.id,snapshots),
+        ()=>runBackgroundAnalysis(inspectionId,snapshots),
         50
       );
 
@@ -583,6 +585,13 @@
 
 
   async function runBackgroundAnalysis(id,snapshots){
+    if(!Number.isInteger(Number(id))||Number(id)<=0){
+      console.error("group analysis skipped: invalid inspection id",id);
+      G.analysisRunning=false;
+      updateSubmitState();
+      return;
+    }
+
     try{
       for(const item of snapshots){
         try{
