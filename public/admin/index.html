@@ -6,6 +6,7 @@
 <title>법인차량 홍보스티커 점검 관리자</title>
 <link rel="stylesheet" href="/css/app.css">
 <link rel="stylesheet" href="/css/pc-layout-fix-v31.css?v=31.0.0">
+<link rel="stylesheet" href="/css/group-inspection-v42.css?v=42.0.0">
 </head>
 <body>
 <main class="container">
@@ -369,6 +370,39 @@
     <button id="searchBtn" class="btn">조회</button>
   </div>
 
+
+  <div class="group-result-toolbar">
+    <div>
+      <strong>차량별 통합 점검결과</strong>
+      <span class="muted">운전석 · 조수석 · 후면을 1건으로 관리합니다.</span>
+    </div>
+    <div class="result-top-actions">
+      <a class="btn secondary small" href="/api/admin/vehicle-inspections/export.csv">통합 CSV 다운로드</a>
+      <button id="groupCompleteSelectedBtn" class="btn primary small" type="button" disabled>선택 확인완료 (0)</button>
+      <button id="groupDeleteSelectedBtn" class="btn danger small" type="button" disabled>선택 삭제 (0)</button>
+    </div>
+  </div>
+
+  <div class="bulk-select-bar">
+    <label class="bulk-select-label">
+      <input id="groupSelectAll" type="checkbox">
+      <span>통합 점검 현재 조회결과 전체선택</span>
+    </label>
+    <span id="groupSelectedCountText" class="muted">선택 0건</span>
+  </div>
+
+  <div id="vehicleInspectionList" class="vehicle-inspection-list">
+    <div class="empty">통합 점검결과를 불러오는 중...</div>
+  </div>
+
+  <details class="legacy-results-box">
+    <summary>기존 개별 점검기록 보기</summary>
+    <div class="message info" style="margin-top:10px">
+      통합 점검 적용 이전의 운전석/조수석/후면 개별 접수기록입니다.
+    </div>
+    <div id="legacyInspectionListMount"></div>
+  </details>
+
   <div id="inspectionList" class="inspection-list"></div>
 
 </section>
@@ -509,5 +543,6 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="/js/admin.js?v=20.0.0"></script>
 <script src="/js/admin-vehicle-data-v31.js?v=31.0.0"></script>
+<script src="/js/admin-group-v42.js?v=42.0.0"></script>
 </body>
 </html>

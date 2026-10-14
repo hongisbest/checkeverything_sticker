@@ -1015,6 +1015,10 @@ async function loadInspections(){
 
     updateInspectionSelectionUI();
 
+    if(window.loadVehicleGroupInspections){
+      await window.loadVehicleGroupInspections();
+    }
+
   }catch(e){
     S.inspectionItems=[];
     clearInspectionSelection();
@@ -1097,18 +1101,9 @@ async function completeSelectedInspections(){
     return;
   }
 
-  const normalCount=S.inspectionItems.filter(
-    x=>S.selectedInspectionIds.has(Number(x.id)) && x.status==="정상"
-  ).length;
-
-  if(!normalCount){
-    alert("선택한 결과 중 자동판정 '정상' 항목이 없습니다.");
-    return;
-  }
-
   const confirmed=confirm(
-    `선택한 결과 중 자동판정 '정상' ${normalCount}건을 관리상태 '확인완료'로 변경합니다.\n\n`+
-    `계속하시겠습니까?`
+    `선택한 ${ids.length}건을 자동판정 결과와 관계없이 관리상태 '확인완료'로 변경합니다.\n\n`+
+    `관리자가 사진을 직접 확인한 항목만 선택했는지 확인해 주세요.\n계속하시겠습니까?`
   );
 
   if(!confirmed)return;
@@ -1126,13 +1121,7 @@ async function completeSelectedInspections(){
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"확인완료 처리 실패");
 
-    let text=`자동판정 정상 ${Number(d.updated||0)}건을 확인완료로 변경했습니다.`;
-
-    if(Number(d.skipped||0)>0){
-      text+=`\n정상이 아닌 ${Number(d.skipped||0)}건은 변경하지 않았습니다.`;
-    }
-
-    alert(text);
+    alert(`${Number(d.updated||0)}건을 확인완료로 변경했습니다.`);
     await loadInspections();
   }catch(e){
     alert(`확인완료 처리에 실패했습니다.\n${e.message}`);

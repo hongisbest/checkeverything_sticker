@@ -186,3 +186,53 @@ CREATE TABLE IF NOT EXISTS st_inspection_receipts (
 
 CREATE INDEX IF NOT EXISTS idx_st_inspection_receipts_year_seq
 ON st_inspection_receipts(receipt_year, receipt_seq);
+
+
+-- V42 통합 차량점검
+-- 신규 점검만 1대=1접수 / 운전석·조수석·후면 3개 결과로 저장합니다.
+-- 기존 st_inspections 및 기존 접수번호/사진은 그대로 보존합니다.
+CREATE TABLE IF NOT EXISTS st_vehicle_inspections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_year INTEGER NOT NULL,
+  receipt_seq INTEGER NOT NULL,
+  receipt_no TEXT NOT NULL UNIQUE,
+  employee_name TEXT NOT NULL,
+  employee_id TEXT NOT NULL DEFAULT '',
+  department TEXT NOT NULL DEFAULT '',
+  vehicle_no TEXT NOT NULL,
+  vehicle_type TEXT NOT NULL,
+  overall_status TEXT NOT NULL DEFAULT '분석대기',
+  admin_state TEXT NOT NULL DEFAULT '미확인',
+  admin_note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(receipt_year,receipt_seq)
+);
+
+CREATE TABLE IF NOT EXISTS st_vehicle_inspection_sides (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  inspection_id INTEGER NOT NULL,
+  side TEXT NOT NULL,
+  sticker_id INTEGER NOT NULL,
+  photo_object_key TEXT NOT NULL UNIQUE,
+  plate_x REAL NOT NULL DEFAULT 0,
+  plate_y REAL NOT NULL DEFAULT 0,
+  plate_width REAL NOT NULL DEFAULT 1,
+  plate_height REAL NOT NULL DEFAULT 1,
+  score REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT '분석대기',
+  findings_json TEXT NOT NULL DEFAULT '[]',
+  metrics_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(inspection_id,side)
+);
+
+CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspections_status
+ON st_vehicle_inspections(overall_status,admin_state);
+
+CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspections_vehicle
+ON st_vehicle_inspections(vehicle_no,created_at);
+
+CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspection_sides_parent
+ON st_vehicle_inspection_sides(inspection_id,side);

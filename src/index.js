@@ -183,7 +183,45 @@ function ensureSchema(env) {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         UNIQUE(receipt_year,receipt_seq)
       )`),
-      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_inspection_receipts_year_seq ON st_inspection_receipts(receipt_year,receipt_seq)")
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_inspection_receipts_year_seq ON st_inspection_receipts(receipt_year,receipt_seq)"),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_vehicle_inspections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        receipt_year INTEGER NOT NULL,
+        receipt_seq INTEGER NOT NULL,
+        receipt_no TEXT NOT NULL UNIQUE,
+        employee_name TEXT NOT NULL,
+        employee_id TEXT NOT NULL DEFAULT '',
+        department TEXT NOT NULL DEFAULT '',
+        vehicle_no TEXT NOT NULL,
+        vehicle_type TEXT NOT NULL,
+        overall_status TEXT NOT NULL DEFAULT '분석대기',
+        admin_state TEXT NOT NULL DEFAULT '미확인',
+        admin_note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(receipt_year,receipt_seq)
+      )`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_vehicle_inspection_sides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        inspection_id INTEGER NOT NULL,
+        side TEXT NOT NULL,
+        sticker_id INTEGER NOT NULL,
+        photo_object_key TEXT NOT NULL UNIQUE,
+        plate_x REAL NOT NULL DEFAULT 0,
+        plate_y REAL NOT NULL DEFAULT 0,
+        plate_width REAL NOT NULL DEFAULT 1,
+        plate_height REAL NOT NULL DEFAULT 1,
+        score REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT '분석대기',
+        findings_json TEXT NOT NULL DEFAULT '[]',
+        metrics_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(inspection_id,side)
+      )`),
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspections_status ON st_vehicle_inspections(overall_status,admin_state)"),
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspections_vehicle ON st_vehicle_inspections(vehicle_no,created_at)"),
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspection_sides_parent ON st_vehicle_inspection_sides(inspection_id,side)")
     ]).catch(e => {
       schemaPromise = null;
       throw e;
@@ -203,6 +241,16 @@ async function api(request, env, url) {
   if (p === "/api/analysis-cache" && request.method === "GET") return getAnalysisCache(env, url);
   if (p === "/api/analysis-cache" && request.method === "POST") return saveAnalysisCache(request, env);
   if (p === "/api/inspection" && request.method === "POST") return saveInspection(request, env);
+  if (p === "/api/vehicle-inspection" && request.method === "POST") return saveVehicleInspection(request, env);
+
+  const vehicleSideAnalysis = p.match(/^\/api\/vehicle-inspection\/(\d+)\/side\/(driver|passenger|rear)\/analysis$/);
+  if (vehicleSideAnalysis && request.method === "PATCH") {
+    return updateVehicleInspectionSideAnalysis(
+      request, env,
+      Number(vehicleSideAnalysis[1]),
+      vehicleSideAnalysis[2]
+    );
+  }
 
   const inspectionAnalysis = p.match(/^\/api\/inspection\/(\d+)\/analysis$/);
   if (inspectionAnalysis && request.method === "PATCH") {
@@ -271,6 +319,29 @@ async function api(request, env, url) {
   if (p === "/api/admin/rules" && request.method === "POST") return saveRules(request, env);
 
   // Results
+  if (p === "/api/admin/vehicle-inspections" && request.method === "GET") return listVehicleInspections(env, url);
+  if (p === "/api/admin/vehicle-inspections/bulk-state" && request.method === "POST") return bulkCompleteVehicleInspections(request, env);
+  if (p === "/api/admin/vehicle-inspections/bulk-delete" && request.method === "POST") return bulkDeleteVehicleInspections(request, env);
+  if (p === "/api/admin/vehicle-inspections/export.csv" && request.method === "GET") return exportVehicleInspectionsCsv(env);
+
+  const vehicleInspectionImage = p.match(/^\/api\/admin\/vehicle-inspections\/(\d+)\/side\/(driver|passenger|rear)\/image$/);
+  if (vehicleInspectionImage && request.method === "GET") {
+    return getVehicleInspectionSideImage(
+      env,
+      Number(vehicleInspectionImage[1]),
+      vehicleInspectionImage[2],
+      url
+    );
+  }
+
+  const vehicleInspectionPatch = p.match(/^\/api\/admin\/vehicle-inspections\/(\d+)$/);
+  if (vehicleInspectionPatch && request.method === "PATCH") {
+    return updateVehicleInspection(request, env, Number(vehicleInspectionPatch[1]));
+  }
+  if (vehicleInspectionPatch && request.method === "DELETE") {
+    return deleteVehicleInspection(env, Number(vehicleInspectionPatch[1]));
+  }
+
   if (p === "/api/admin/inspections" && request.method === "GET") return listInspections(env, url);
   if (p === "/api/admin/inspections/bulk-state" && request.method === "POST") return bulkCompleteInspections(request, env);
   if (p === "/api/admin/inspections/bulk-delete" && request.method === "POST") return bulkDeleteInspections(request, env);
@@ -1630,6 +1701,578 @@ async function ensureExistingInspectionReceipts(env) {
   }
 }
 
+
+function vehicleInspectionKstYear(){
+  return new Date(Date.now()+9*60*60*1000).getUTCFullYear();
+}
+
+async function allocateVehicleInspectionReceipt(env){
+  const year=vehicleInspectionKstYear();
+
+  for(let attempt=0;attempt<5;attempt++){
+    const seqRow=await env.DB.prepare(`
+      INSERT INTO st_receipt_sequences(receipt_year,last_seq)
+      VALUES(?,1)
+      ON CONFLICT(receipt_year) DO UPDATE SET
+        last_seq=last_seq+1
+      RETURNING last_seq
+    `).bind(year).first();
+
+    const seq=Number(seqRow?.last_seq||0);
+    if(!seq)continue;
+
+    return{
+      year,
+      seq,
+      receipt_no:`${year}-${String(seq).padStart(3,"0")}`
+    };
+  }
+
+  throw new Error("통합 점검 접수번호 생성에 실패했습니다.");
+}
+
+function normalizeInspectionSideMeta(meta,side){
+  const data=meta?.sides?.[side]||{};
+  const plate=data.plate||{};
+
+  const stickerId=Number(data.sticker_id);
+  const values=[
+    Number(plate.x),
+    Number(plate.y),
+    Number(plate.width),
+    Number(plate.height)
+  ];
+
+  if(!stickerId)return{ok:false,error:`${side} 기준 스티커 정보가 없습니다.`};
+
+  if(
+    !values.every(Number.isFinite) ||
+    values[0]<0 || values[1]<0 ||
+    values[2]<=.01 || values[3]<=.01 ||
+    values[0]+values[2]>1.0001 ||
+    values[1]+values[3]>1.0001
+  ){
+    return{ok:false,error:`${side} 번호판 영역이 올바르지 않습니다.`};
+  }
+
+  return{
+    ok:true,
+    sticker_id:stickerId,
+    plate:{
+      x:values[0],y:values[1],width:values[2],height:values[3]
+    }
+  };
+}
+
+async function saveVehicleInspection(request,env){
+  const form=await request.formData();
+
+  let meta;
+  try{
+    meta=JSON.parse(String(form.get("meta")||""));
+  }catch{
+    return j({ok:false,error:"통합 점검 데이터 형식이 올바르지 않습니다."},400);
+  }
+
+  const sides=["driver","passenger","rear"];
+  const sideLabels={driver:"운전석",passenger:"조수석",rear:"후면"};
+  const files={};
+  const sideMeta={};
+
+  for(const side of sides){
+    const file=form.get(`${side}_file`);
+
+    if(!file||typeof file==="string"){
+      return j({ok:false,error:`${sideLabels[side]} 사진이 없습니다.`},400);
+    }
+
+    if(!String(file.type||"").startsWith("image/")){
+      return j({ok:false,error:`${sideLabels[side]} 사진은 이미지 파일만 가능합니다.`},400);
+    }
+
+    if(Number(file.size||0)>8*1024*1024){
+      return j({ok:false,error:`${sideLabels[side]} 사진은 8MB 이하로 제출해 주세요.`},400);
+    }
+
+    files[side]=file;
+    sideMeta[side]=normalizeInspectionSideMeta(meta,side);
+
+    if(!sideMeta[side].ok){
+      return j({ok:false,error:sideMeta[side].error},400);
+    }
+  }
+
+  const name=txt(meta.employee_name,60);
+  const employeeId=txt(meta.employee_id,40);
+  const department=txt(meta.department,100);
+  const vehicle=txt(meta.vehicle_no,40);
+  const vehicleType=String(meta.vehicle_type||"").trim().toLowerCase();
+
+  if(!name||!employeeId||!department||!vehicle){
+    return j({ok:false,error:"성명, 사번, 부서, 차량번호를 모두 입력해 주세요."},400);
+  }
+
+  if(!["k3","avante","ev3"].includes(vehicleType)){
+    return j({ok:false,error:"차종을 다시 선택해 주세요."},400);
+  }
+
+  const registryMatch=await findVehicleRegistryMatch(env,{
+    employee_name:name,
+    employee_id:employeeId,
+    department,
+    vehicle_no:vehicle
+  });
+
+  if(!registryMatch){
+    return j({
+      ok:false,
+      error:"입력한 성명·사번·부서·차량번호가 관리자 등록 차량데이터와 일치하지 않습니다."
+    },409);
+  }
+
+  for(const side of sides){
+    const sticker=await env.DB.prepare(`
+      SELECT id,side_hint
+      FROM st_stickers
+      WHERE id=? AND is_active=1
+    `).bind(sideMeta[side].sticker_id).first();
+
+    if(!sticker){
+      return j({ok:false,error:`${sideLabels[side]} 기준 스티커를 찾을 수 없습니다.`},400);
+    }
+
+    if(String(sticker.side_hint||"")!==side){
+      return j({ok:false,error:`${sideLabels[side]} 기준 스티커 설정이 올바르지 않습니다.`},400);
+    }
+  }
+
+  const receipt=await allocateVehicleInspectionReceipt(env);
+  const uploaded=[];
+
+  try{
+    for(const side of sides){
+      const key=`sticker-compare/inspection/${receipt.receipt_no}-${side}.jpg`;
+      await env.STORAGE.put(key,files[side].stream(),{
+        httpMetadata:{contentType:files[side].type||"image/jpeg"}
+      });
+      uploaded.push({side,key});
+    }
+
+    const parent=await env.DB.prepare(`
+      INSERT INTO st_vehicle_inspections(
+        receipt_year,receipt_seq,receipt_no,
+        employee_name,employee_id,department,vehicle_no,vehicle_type,
+        overall_status,admin_state,admin_note
+      ) VALUES(?,?,?,?,?,?,?,?,?,'미확인','')
+      RETURNING id
+    `).bind(
+      receipt.year,
+      receipt.seq,
+      receipt.receipt_no,
+      name,
+      employeeId,
+      department,
+      vehicle,
+      vehicleType,
+      "분석대기"
+    ).first();
+
+    const inspectionId=Number(parent?.id||0);
+    if(!inspectionId)throw new Error("통합 점검 저장번호를 만들지 못했습니다.");
+
+    const sideResponse={};
+
+    try{
+      for(const side of sides){
+        const sm=sideMeta[side];
+        const key=uploaded.find(x=>x.side===side).key;
+
+        const row=await env.DB.prepare(`
+          INSERT INTO st_vehicle_inspection_sides(
+            inspection_id,side,sticker_id,photo_object_key,
+            plate_x,plate_y,plate_width,plate_height,
+            score,status,findings_json,metrics_json
+          ) VALUES(?,?,?,?,?,?,?,?,0,'분석대기',?,?)
+          RETURNING id
+        `).bind(
+          inspectionId,
+          side,
+          sm.sticker_id,
+          key,
+          sm.plate.x,
+          sm.plate.y,
+          sm.plate.width,
+          sm.plate.height,
+          JSON.stringify(["사진 저장 완료 · 관리자용 자동분석 대기"]),
+          JSON.stringify({
+            userAnalysisHidden:true,
+            analysisPending:true,
+            vehicleType,
+            sideHint:side,
+            plateConfirmed:true,
+            plateCrop:sm.plate
+          })
+        ).first();
+
+        const sideId=Number(row?.id||0);
+        const token=env.ADMIN_SESSION_SECRET
+          ? await sign(
+              `vehicle-analysis:${inspectionId}:${side}:${key}`,
+              env.ADMIN_SESSION_SECRET
+            )
+          : "";
+
+        sideResponse[side]={id:sideId,analysis_token:token};
+      }
+    }catch(error){
+      await env.DB.prepare(
+        "DELETE FROM st_vehicle_inspection_sides WHERE inspection_id=?"
+      ).bind(inspectionId).run();
+      await env.DB.prepare(
+        "DELETE FROM st_vehicle_inspections WHERE id=?"
+      ).bind(inspectionId).run();
+      throw error;
+    }
+
+    return j({
+      ok:true,
+      id:inspectionId,
+      receipt_no:receipt.receipt_no,
+      sides:sideResponse
+    });
+  }catch(error){
+    console.error("vehicle inspection save failed",error);
+
+    for(const item of uploaded){
+      try{await env.STORAGE.delete(item.key)}catch{}
+    }
+
+    return j({
+      ok:false,
+      error:error?.message||"통합 점검 저장에 실패했습니다."
+    },500);
+  }
+}
+
+async function recomputeVehicleInspectionStatus(env,inspectionId){
+  const rows=await env.DB.prepare(`
+    SELECT side,status
+    FROM st_vehicle_inspection_sides
+    WHERE inspection_id=?
+  `).bind(inspectionId).all();
+
+  const statuses=(rows.results||[]).map(x=>String(x.status||""));
+
+  let overall="분석대기";
+
+  if(statuses.includes("확인필요")){
+    overall="확인필요";
+  }else if(statuses.includes("판정불가")){
+    overall="판정불가";
+  }else if(statuses.length===3 && statuses.every(x=>x==="정상")){
+    overall="정상";
+  }else if(statuses.length===3 && !statuses.includes("분석대기")){
+    overall="판정불가";
+  }
+
+  await env.DB.prepare(`
+    UPDATE st_vehicle_inspections
+    SET overall_status=?,updated_at=datetime('now')
+    WHERE id=?
+  `).bind(overall,inspectionId).run();
+
+  return overall;
+}
+
+async function updateVehicleInspectionSideAnalysis(request,env,inspectionId,side){
+  if(!env.ADMIN_SESSION_SECRET){
+    return j({ok:false,error:"분석결과 저장용 Secret이 설정되지 않았습니다."},503);
+  }
+
+  const row=await env.DB.prepare(`
+    SELECT id,photo_object_key
+    FROM st_vehicle_inspection_sides
+    WHERE inspection_id=? AND side=?
+  `).bind(inspectionId,side).first();
+
+  if(!row)return j({ok:false,error:"해당 촬영면 점검결과를 찾을 수 없습니다."},404);
+
+  const token=String(request.headers.get("x-analysis-token")||"");
+  const expected=await sign(
+    `vehicle-analysis:${inspectionId}:${side}:${row.photo_object_key}`,
+    env.ADMIN_SESSION_SECRET
+  );
+
+  if(!token||!safeEqual(token,expected)){
+    return j({ok:false,error:"분석결과 저장 권한이 없습니다."},403);
+  }
+
+  const body=await request.json().catch(()=>({}));
+  const status=["정상","확인필요","판정불가"].includes(body.status)
+    ? body.status
+    : "판정불가";
+
+  const score=Math.max(0,Math.min(100,Number(body.score)||0));
+  const findings=Array.isArray(body.findings)?body.findings.slice(0,30):[];
+  const metrics=body.metrics&&typeof body.metrics==="object"?body.metrics:{};
+
+  await env.DB.prepare(`
+    UPDATE st_vehicle_inspection_sides
+    SET score=?,status=?,findings_json=?,metrics_json=?,updated_at=datetime('now')
+    WHERE inspection_id=? AND side=?
+  `).bind(
+    score,status,
+    JSON.stringify(findings),
+    JSON.stringify(metrics),
+    inspectionId,side
+  ).run();
+
+  const overall=await recomputeVehicleInspectionStatus(env,inspectionId);
+
+  return j({ok:true,id:inspectionId,side,status,overall_status:overall});
+}
+
+async function listVehicleInspections(env,url){
+  const q=txt(url.searchParams.get("q"),100);
+  const status=txt(url.searchParams.get("status"),20);
+  const state=txt(url.searchParams.get("admin_state"),20);
+
+  const where=[];
+  const bind=[];
+
+  if(status){
+    where.push("g.overall_status=?");
+    bind.push(status);
+  }
+
+  if(state){
+    where.push("g.admin_state=?");
+    bind.push(state);
+  }
+
+  if(q){
+    where.push(`(
+      g.receipt_no LIKE ? OR
+      g.employee_name LIKE ? OR
+      g.employee_id LIKE ? OR
+      g.department LIKE ? OR
+      g.vehicle_no LIKE ?
+    )`);
+    const v=`%${q}%`;
+    bind.push(v,v,v,v,v);
+  }
+
+  const rows=await env.DB.prepare(`
+    SELECT
+      g.id,g.receipt_no,g.employee_name,g.employee_id,g.department,
+      g.vehicle_no,g.vehicle_type,g.overall_status,g.admin_state,g.admin_note,
+      g.created_at,g.updated_at,
+
+      d.id AS driver_id,d.status AS driver_status,d.score AS driver_score,
+      d.findings_json AS driver_findings,d.metrics_json AS driver_metrics,
+
+      p.id AS passenger_id,p.status AS passenger_status,p.score AS passenger_score,
+      p.findings_json AS passenger_findings,p.metrics_json AS passenger_metrics,
+
+      r.id AS rear_id,r.status AS rear_status,r.score AS rear_score,
+      r.findings_json AS rear_findings,r.metrics_json AS rear_metrics
+
+    FROM st_vehicle_inspections g
+    LEFT JOIN st_vehicle_inspection_sides d
+      ON d.inspection_id=g.id AND d.side='driver'
+    LEFT JOIN st_vehicle_inspection_sides p
+      ON p.inspection_id=g.id AND p.side='passenger'
+    LEFT JOIN st_vehicle_inspection_sides r
+      ON r.inspection_id=g.id AND r.side='rear'
+    ${where.length?"WHERE "+where.join(" AND "):""}
+    ORDER BY g.id DESC
+    LIMIT 500
+  `).bind(...bind).all();
+
+  const items=rows.results||[];
+
+  const counts=await env.DB.prepare(`
+    SELECT
+      COUNT(*) AS all_count,
+      SUM(CASE WHEN overall_status='정상' THEN 1 ELSE 0 END) AS normal_count,
+      SUM(CASE WHEN overall_status='확인필요' THEN 1 ELSE 0 END) AS review_count,
+      SUM(CASE WHEN overall_status='판정불가' THEN 1 ELSE 0 END) AS invalid_count,
+      SUM(CASE WHEN admin_state='개선요청' THEN 1 ELSE 0 END) AS action_count
+    FROM st_vehicle_inspections
+  `).first();
+
+  return j({
+    ok:true,
+    items,
+    counts:{
+      all:Number(counts?.all_count||0),
+      normal:Number(counts?.normal_count||0),
+      review:Number(counts?.review_count||0),
+      invalid:Number(counts?.invalid_count||0),
+      action:Number(counts?.action_count||0)
+    }
+  });
+}
+
+async function updateVehicleInspection(request,env,id){
+  const body=await request.json().catch(()=>({}));
+  const state=["미확인","확인완료","개선요청","조치완료"].includes(body.admin_state)
+    ? body.admin_state
+    : "미확인";
+
+  const note=txt(body.admin_note,2000);
+
+  const result=await env.DB.prepare(`
+    UPDATE st_vehicle_inspections
+    SET admin_state=?,admin_note=?,updated_at=datetime('now')
+    WHERE id=?
+  `).bind(state,note,id).run();
+
+  if(!Number(result?.meta?.changes||0)){
+    return j({ok:false,error:"통합 점검결과를 찾을 수 없습니다."},404);
+  }
+
+  return j({ok:true});
+}
+
+async function bulkCompleteVehicleInspections(request,env){
+  const body=await request.json().catch(()=>({}));
+  const ids=[...new Set(
+    (Array.isArray(body.ids)?body.ids:[])
+      .map(Number)
+      .filter(x=>Number.isInteger(x)&&x>0)
+  )];
+
+  if(!ids.length)return j({ok:false,error:"확인완료 처리할 차량을 선택해 주세요."},400);
+  if(ids.length>500)return j({ok:false,error:"한 번에 최대 500건까지 처리할 수 있습니다."},400);
+
+  const placeholders=ids.map(()=>"?").join(",");
+  const result=await env.DB.prepare(`
+    UPDATE st_vehicle_inspections
+    SET admin_state='확인완료',updated_at=datetime('now')
+    WHERE id IN (${placeholders})
+  `).bind(...ids).run();
+
+  return j({ok:true,updated:Number(result?.meta?.changes||0)});
+}
+
+async function getVehicleInspectionSideImage(env,id,side,url){
+  const row=await env.DB.prepare(`
+    SELECT g.receipt_no,s.photo_object_key
+    FROM st_vehicle_inspection_sides s
+    JOIN st_vehicle_inspections g ON g.id=s.inspection_id
+    WHERE s.inspection_id=? AND s.side=?
+  `).bind(id,side).first();
+
+  if(!row)return new Response("Not Found",{status:404});
+
+  const object=await env.STORAGE.get(row.photo_object_key);
+  if(!object)return new Response("Not Found",{status:404});
+
+  const h=new Headers();
+  object.writeHttpMetadata(h);
+  h.set("cache-control","private,max-age=60");
+
+  if(url?.searchParams?.get("download")==="1"){
+    const label=side==="driver"?"driver":(side==="passenger"?"passenger":"rear");
+    h.set(
+      "content-disposition",
+      `attachment; filename="${String(row.receipt_no||id)}-${label}.jpg"`
+    );
+  }
+
+  return new Response(object.body,{headers:h});
+}
+
+async function deleteVehicleInspection(env,id){
+  const rows=await env.DB.prepare(`
+    SELECT photo_object_key
+    FROM st_vehicle_inspection_sides
+    WHERE inspection_id=?
+  `).bind(id).all();
+
+  const keys=(rows.results||[]).map(x=>String(x.photo_object_key||"")).filter(Boolean);
+
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM st_vehicle_inspection_sides WHERE inspection_id=?").bind(id),
+    env.DB.prepare("DELETE FROM st_vehicle_inspections WHERE id=?").bind(id)
+  ]);
+
+  let imageDeleteFailed=0;
+  for(const key of keys){
+    try{await env.STORAGE.delete(key)}catch{imageDeleteFailed++}
+  }
+
+  return j({ok:true,deleted:1,image_delete_failed:imageDeleteFailed});
+}
+
+async function bulkDeleteVehicleInspections(request,env){
+  const body=await request.json().catch(()=>({}));
+  const ids=[...new Set(
+    (Array.isArray(body.ids)?body.ids:[])
+      .map(Number)
+      .filter(x=>Number.isInteger(x)&&x>0)
+  )];
+
+  if(!ids.length)return j({ok:false,error:"삭제할 차량 점검결과를 선택해 주세요."},400);
+  if(ids.length>500)return j({ok:false,error:"한 번에 최대 500건까지 삭제할 수 있습니다."},400);
+
+  let deleted=0;
+  let imageDeleteFailed=0;
+
+  for(const id of ids){
+    const r=await deleteVehicleInspection(env,id);
+    const data=await r.json();
+    if(data.ok){
+      deleted+=Number(data.deleted||0);
+      imageDeleteFailed+=Number(data.image_delete_failed||0);
+    }
+  }
+
+  return j({ok:true,deleted,image_delete_failed:imageDeleteFailed});
+}
+
+async function exportVehicleInspectionsCsv(env){
+  const rows=await env.DB.prepare(`
+    SELECT
+      g.receipt_no,g.employee_name,g.employee_id,g.department,g.vehicle_no,
+      g.vehicle_type,g.overall_status,g.admin_state,g.admin_note,g.created_at,
+      d.status AS driver_status,
+      p.status AS passenger_status,
+      r.status AS rear_status
+    FROM st_vehicle_inspections g
+    LEFT JOIN st_vehicle_inspection_sides d
+      ON d.inspection_id=g.id AND d.side='driver'
+    LEFT JOIN st_vehicle_inspection_sides p
+      ON p.inspection_id=g.id AND p.side='passenger'
+    LEFT JOIN st_vehicle_inspection_sides r
+      ON r.inspection_id=g.id AND r.side='rear'
+    ORDER BY g.id DESC
+  `).all();
+
+  const header=[
+    "접수번호","성명","사번","부서","차량번호","차종",
+    "종합판정","운전석","조수석","후면","관리상태","관리자메모","접수일시"
+  ];
+
+  const csv=[
+    header,
+    ...(rows.results||[]).map(x=>[
+      x.receipt_no,x.employee_name,x.employee_id,x.department,x.vehicle_no,
+      x.vehicle_type,x.overall_status,x.driver_status,x.passenger_status,
+      x.rear_status,x.admin_state,x.admin_note,x.created_at
+    ])
+  ].map(row=>row.map(csvCell).join(",")).join("\\r\\n");
+
+  return new Response("\\ufeff"+csv,{
+    headers:{
+      "content-type":"text/csv; charset=utf-8",
+      "content-disposition":'attachment; filename="vehicle-inspections.csv"'
+    }
+  });
+}
+
+
 async function saveInspection(request, env) {
   const form = await request.formData();
   const file = form.get("file");
@@ -1918,35 +2561,15 @@ async function bulkCompleteInspections(request, env) {
 
   const placeholders=ids.map(()=>"?").join(",");
 
-  const eligible=await env.DB.prepare(`
-    SELECT id
-    FROM st_inspections
-    WHERE id IN (${placeholders})
-      AND status='정상'
-  `).bind(...ids).all();
-
-  const eligibleIds=(eligible.results||[]).map(x=>Number(x.id));
-
-  if(!eligibleIds.length){
-    return j({
-      ok:false,
-      error:"선택한 결과 중 자동판정 '정상' 항목이 없습니다."
-    },409);
-  }
-
-  const eligiblePlaceholders=eligibleIds.map(()=>"?").join(",");
-
-  await env.DB.prepare(`
+  const result=await env.DB.prepare(`
     UPDATE st_inspections
     SET admin_state='확인완료'
-    WHERE id IN (${eligiblePlaceholders})
-      AND status='정상'
-  `).bind(...eligibleIds).run();
+    WHERE id IN (${placeholders})
+  `).bind(...ids).run();
 
   return j({
     ok:true,
-    updated:eligibleIds.length,
-    skipped:ids.length-eligibleIds.length
+    updated:Number(result?.meta?.changes||0)
   });
 }
 
