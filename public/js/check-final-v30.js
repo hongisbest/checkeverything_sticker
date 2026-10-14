@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const FINAL_ENGINE="final-presence-v2-multireference";
+  const FINAL_ENGINE="final-presence-v3-presence-first";
   const PLATE_HANGUL=
     "가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호";
 
@@ -98,6 +98,7 @@
       const metrics={
         finalPresenceV1:true,
         finalPresenceV2:true,
+        finalPresenceV3:true,
         analysisEngine:FINAL_ENGINE,
         vehicleType:snapshot.vehicleType,
         sideHint:snapshot.sticker.side_hint,
@@ -110,6 +111,8 @@
         presenceReferenceKeypoints:presence.referenceKeypoints,
         presencePhotoKeypoints:presence.photoKeypoints,
         presenceSearchMaxSide:presence.searchMaxSide||null,
+        presenceGeometryValid:presence.geometryValid===true,
+        detectedStickerBox:presence.projectedStickerBox||null,
         presenceReferenceAttempts:candidateExamples.length,
         detectedStickerCenter:presence.center||null,
         rearPosition:"not-applicable",
@@ -296,17 +299,17 @@
       des1=new cv.Mat();
       des2=new cv.Mat();
 
-      // 복잡한 배경에서 작은 스티커 특징점이 상위 2,500개 밖으로
-      // 밀려나는 문제를 줄이기 위해 특징점 수를 늘립니다.
-      orb=new cv.ORB(6000);
+      // 존재 여부가 핵심이므로 작은 글자형 스티커에서도 특징점을 최대한 확보합니다.
+      orb=new cv.ORB(7000);
       orb.detectAndCompute(g1,mask1,kp1,des1);
       orb.detectAndCompute(g2,mask2,kp2,des2);
 
       const referenceKeypoints=kp1.size();
       const photoKeypoints=kp2.size();
 
+      // BGF리테일처럼 단색 글자형 스티커는 기준영역 자체의 특징점이 적을 수 있습니다.
       if(
-        referenceKeypoints<16 ||
+        referenceKeypoints<8 ||
         photoKeypoints<30 ||
         des1.empty() ||
         des2.empty()
@@ -321,6 +324,7 @@
           photoKeypoints,
           confidence:0,
           center:null,
+          geometryValid:false,
           searchMaxSide:targetMaxSide
         };
       }
@@ -346,8 +350,9 @@
 
         all.push(item);
 
-        // 기존 55보다 약간 넓게 후보를 받아 RANSAC에서 다시 검증합니다.
-        if(d<62)good.push(item);
+        // 디자인 정밀도보다 실제 존재를 우선하므로 후보 폭을 넓히고
+        // 아래 RANSAC + 투영형상 검증으로 오탐을 다시 걸러냅니다.
+        if(d<72)good.push(item);
       }
 
       all.sort((a,b)=>a.distance-b.distance);
@@ -368,6 +373,7 @@
           photoKeypoints,
           confidence:0,
           center:null,
+          geometryValid:false,
           searchMaxSide:targetMaxSide
         };
       }
@@ -395,7 +401,7 @@
         srcPts,
         dstPts,
         cv.RANSAC,
-        5,
+        6,
         hMask
       );
 
@@ -419,35 +425,63 @@
 
       const inlierRatio=inliers/Math.max(1,good.length);
 
-      const center=inlierPoints.length
-        ? [
-            median(inlierPoints.map(x=>x[0])),
-            median(inlierPoints.map(x=>x[1]))
-          ]
+      const H=mat3x3Values(homography);
+      const projected=H
+        ? projectReferenceCorners(
+            H,
+            ref.canvas.width,
+            ref.canvas.height,
+            photo.canvas.width,
+            photo.canvas.height,
+            photo.scale
+          )
         : null;
 
-      // 기존 강한 기준은 유지합니다.
+      const geometryValid=Boolean(projected?.valid);
+
+      const center=geometryValid
+        ? projected.center
+        : (inlierPoints.length
+            ? [
+                median(inlierPoints.map(x=>x[0])),
+                median(inlierPoints.map(x=>x[1]))
+              ]
+            : null);
+
+      // 기존의 매우 강한 일치조건은 그대로 유지합니다.
       const strictPass=
         inliers>=8 &&
         topMeanDistance<=39.0 &&
         Boolean(center);
 
-      // 작은/비스듬한 스티커는 descriptor 거리가 조금 늘어날 수 있으므로,
-      // 더 많은 RANSAC 일치점과 충분한 일치비율이 있을 때만 보조 허용합니다.
+      // 원근/거리 변화가 있는 정상 스티커용.
       const perspectivePass=
-        inliers>=10 &&
-        good.length>=12 &&
-        inlierRatio>=.28 &&
-        topMeanDistance<=45.0 &&
+        inliers>=9 &&
+        good.length>=10 &&
+        inlierRatio>=.24 &&
+        topMeanDistance<=50.0 &&
+        geometryValid &&
         Boolean(center);
 
-      const pass=strictPass||perspectivePass;
+      // 최종 목적은 "스티커가 붙어 있는가" 확인입니다.
+      // 디자인 유사도 자체를 정상/확인필요의 핵심 기준으로 쓰지 않고,
+      // 서로 다른 특징점들이 하나의 실제 스티커 평면으로 일관되게 모이는 경우
+      // 존재로 인정합니다.
+      const presencePass=
+        inliers>=6 &&
+        good.length>=7 &&
+        inlierRatio>=.18 &&
+        topMeanDistance<=60.0 &&
+        geometryValid &&
+        Boolean(center);
+
+      const pass=strictPass||perspectivePass||presencePass;
 
       const confidence=pass
         ? clamp(
-            (Math.min(24,inliers)/24)*55+
-            clamp((50-topMeanDistance)/18,0,1)*25+
-            clamp(inlierRatio/.55,0,1)*20,
+            (Math.min(20,inliers)/20)*50+
+            clamp(inlierRatio/.45,0,1)*30+
+            clamp((65-topMeanDistance)/30,0,1)*20,
             0,100
           )
         : 0;
@@ -462,6 +496,8 @@
         photoKeypoints,
         confidence,
         center,
+        geometryValid,
+        projectedStickerBox:projected?.box||null,
         searchMaxSide:targetMaxSide
       };
 
@@ -473,6 +509,77 @@
         try{obj?.delete?.();}catch{}
       }
     }
+  }
+
+  function projectReferenceCorners(H,refW,refH,photoW,photoH,photoScale){
+    if(!H||H.length<9)return null;
+
+    const map=(x,y)=>{
+      const d=H[6]*x+H[7]*y+H[8];
+      if(!Number.isFinite(d)||Math.abs(d)<1e-8)return null;
+
+      const px=(H[0]*x+H[1]*y+H[2])/d;
+      const py=(H[3]*x+H[4]*y+H[5])/d;
+
+      if(!Number.isFinite(px)||!Number.isFinite(py))return null;
+      return[px,py];
+    };
+
+    const pts=[
+      map(0,0),
+      map(refW,0),
+      map(refW,refH),
+      map(0,refH)
+    ];
+
+    if(pts.some(x=>!x))return null;
+
+    const xs=pts.map(p=>p[0]);
+    const ys=pts.map(p=>p[1]);
+    const minX=Math.min(...xs);
+    const maxX=Math.max(...xs);
+    const minY=Math.min(...ys);
+    const maxY=Math.max(...ys);
+    const w=maxX-minX;
+    const h=maxY-minY;
+
+    if(w<12||h<8)return null;
+
+    // 스티커는 사진 전체보다 훨씬 작은 객체여야 하며 지나치게 세로로 찌그러진
+    // 허위 homography는 존재검출로 인정하지 않습니다.
+    const bboxArea=(w*h)/Math.max(1,photoW*photoH);
+    const ratio=w/Math.max(1,h);
+
+    const marginX=photoW*.12;
+    const marginY=photoH*.12;
+    const mostlyInside=
+      minX>=-marginX &&
+      minY>=-marginY &&
+      maxX<=photoW+marginX &&
+      maxY<=photoH+marginY;
+
+    const valid=
+      mostlyInside &&
+      bboxArea>=.00008 &&
+      bboxArea<=.18 &&
+      ratio>=.45 &&
+      ratio<=9.0;
+
+    return{
+      valid,
+      center:[
+        ((minX+maxX)/2)/Math.max(.0001,photoScale),
+        ((minY+maxY)/2)/Math.max(.0001,photoScale)
+      ],
+      box:{
+        x:minX/Math.max(1,photoW),
+        y:minY/Math.max(1,photoH),
+        width:w/Math.max(1,photoW),
+        height:h/Math.max(1,photoH)
+      },
+      bboxArea,
+      ratio
+    };
   }
 
   function fitImageToTargetMaxSide(image,targetMaxSide){
