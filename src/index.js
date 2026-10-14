@@ -2629,12 +2629,13 @@ async function exportVehicleInspectionsCsv(env){
       x.vehicle_type,x.overall_status,x.driver_status,x.passenger_status,
       x.rear_status,x.admin_state,x.admin_note,x.created_at
     ])
-  ].map(row=>row.map(csvEscape).join(",")).join("\\r\\n");
+  ].map(row=>row.map(csvEscape).join(",")).join("\r\n");
 
-  return new Response("\\ufeff"+csv,{
+  return new Response("\uFEFF"+csv,{
     headers:{
       "content-type":"text/csv; charset=utf-8",
-      "content-disposition":'attachment; filename="vehicle-inspections.csv"'
+      "content-disposition":'attachment; filename="vehicle-inspections.csv"',
+      "cache-control":"no-store, no-transform"
     }
   });
 }
