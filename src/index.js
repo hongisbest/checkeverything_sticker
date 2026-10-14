@@ -221,7 +221,11 @@ function ensureSchema(env) {
       )`),
       env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspections_status ON st_vehicle_inspections(overall_status,admin_state)"),
       env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspections_vehicle ON st_vehicle_inspections(vehicle_no,created_at)"),
-      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspection_sides_parent ON st_vehicle_inspection_sides(inspection_id,side)")
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspection_sides_parent ON st_vehicle_inspection_sides(inspection_id,side)"),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS st_vehicle_receipt_sequences (
+        receipt_year INTEGER PRIMARY KEY,
+        last_seq INTEGER NOT NULL DEFAULT 0
+      )`)
     ]).catch(e => {
       schemaPromise = null;
       throw e;
@@ -1736,12 +1740,22 @@ function vehicleInspectionKstYear(){
 async function allocateVehicleInspectionReceipt(env){
   const year=vehicleInspectionKstYear();
 
+  // 통합점검 번호는 기존 개별점검 번호와 완전히 분리합니다.
+  // 새 시퀀스 테이블을 처음 만들 때 현재 남아있는 통합점검의 최대 번호를
+  // 기준값으로 사용합니다. 통합점검 기록이 0건이면 0에서 시작하므로
+  // 다음 접수는 YYYY-001이 됩니다.
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO st_vehicle_receipt_sequences(receipt_year,last_seq)
+    SELECT ?,COALESCE(MAX(receipt_seq),0)
+    FROM st_vehicle_inspections
+    WHERE receipt_year=?
+  `).bind(year,year).run();
+
   for(let attempt=0;attempt<5;attempt++){
     const seqRow=await env.DB.prepare(`
-      INSERT INTO st_receipt_sequences(receipt_year,last_seq)
-      VALUES(?,1)
-      ON CONFLICT(receipt_year) DO UPDATE SET
-        last_seq=last_seq+1
+      UPDATE st_vehicle_receipt_sequences
+      SET last_seq=last_seq+1
+      WHERE receipt_year=?
       RETURNING last_seq
     `).bind(year).first();
 

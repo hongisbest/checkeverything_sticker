@@ -236,3 +236,12 @@ ON st_vehicle_inspections(vehicle_no,created_at);
 
 CREATE INDEX IF NOT EXISTS idx_st_vehicle_inspection_sides_parent
 ON st_vehicle_inspection_sides(inspection_id,side);
+
+
+-- V42.4 통합점검 전용 연도별 접수번호 시퀀스
+-- 기존 개별점검(st_receipt_sequences)과 분리합니다.
+-- 최초 생성 시 통합점검 기록이 없으면 다음 접수는 YYYY-001부터 시작합니다.
+CREATE TABLE IF NOT EXISTS st_vehicle_receipt_sequences (
+  receipt_year INTEGER PRIMARY KEY,
+  last_seq INTEGER NOT NULL DEFAULT 0
+);

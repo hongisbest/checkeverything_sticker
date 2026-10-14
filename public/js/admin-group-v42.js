@@ -20,9 +20,6 @@
     $("groupCompleteSelectedBtn")?.addEventListener("click",bulkComplete);
     $("groupDeleteSelectedBtn")?.addEventListener("click",bulkDelete);
 
-    const legacy=$("inspectionList");
-    const mount=$("legacyInspectionListMount");
-    if(legacy&&mount)mount.appendChild(legacy);
   });
 
   async function loadGroups(){
