@@ -44,6 +44,7 @@
       const d=await r.json();
       if(!r.ok)throw new Error(d.error||"점검 기준정보를 불러오지 못했습니다.");
       G.config=d;
+      refreshGuideCards();
       updateSubmitState();
     }catch(e){
       setMessage(e.message,"error");
@@ -75,6 +76,7 @@
 
         G.vehicleType=next;
         G.activeIndex=0;
+        refreshGuideCards();
         syncRegistryGate();
         updateSubmitState();
       },true);
@@ -131,6 +133,24 @@
 
         <div class="message info">
           ${s.label}의 차량번호판과 홍보스티커가 한 장에 함께 보이도록 촬영해 주세요.
+        </div>
+
+        <div id="groupGuide-${s.key}" class="group-guide-card">
+          <div class="group-guide-head">
+            <div>
+              <span class="step">NORMAL PHOTO GUIDE</span>
+              <strong>${s.label} 정상 촬영 예시</strong>
+            </div>
+            <span id="groupGuideVehicle-${s.key}" class="pill pending">차종 선택 전</span>
+          </div>
+          <div id="groupGuideBody-${s.key}" class="group-guide-body">
+            <div class="group-guide-placeholder">
+              차종을 선택하면 해당 차종의 ${s.label} 정상 예시사진이 표시됩니다.
+            </div>
+          </div>
+          <div id="groupGuideText-${s.key}" class="message info group-guide-text">
+            예시사진과 비슷하게 차량번호판과 홍보스티커가 함께 보이도록 촬영해 주세요.
+          </div>
         </div>
 
         <label class="btn primary full group-photo-button">
@@ -647,6 +667,104 @@
     canvas.getContext("2d").drawImage(image,0,0,canvas.width,canvas.height);
     return canvas;
   }
+
+  function refreshGuideCards(){
+    for(const s of SIDES){
+      renderGuideCard(s.key,s.label);
+    }
+  }
+
+  function renderGuideCard(side,label){
+    const body=$(`groupGuideBody-${side}`);
+    const pill=$(`groupGuideVehicle-${side}`);
+    const text=$(`groupGuideText-${side}`);
+
+    if(!body||!pill||!text)return;
+
+    if(!G.vehicleType){
+      pill.textContent="차종 선택 전";
+      pill.className="pill pending";
+      body.innerHTML=`
+        <div class="group-guide-placeholder">
+          차종을 선택하면 해당 차종의 ${label} 정상 예시사진이 표시됩니다.
+        </div>
+      `;
+      text.textContent=
+        "예시사진과 비슷하게 차량번호판과 홍보스티커가 함께 보이도록 촬영해 주세요.";
+      return;
+    }
+
+    const guide=findGuideForSide(side,G.vehicleType);
+
+    pill.textContent=vehicleLabel(G.vehicleType);
+    pill.className="pill normal";
+
+    if(!guide?.example?.image_url){
+      body.innerHTML=`
+        <div class="group-guide-placeholder warn">
+          ${vehicleLabel(G.vehicleType)} ${label} 정상 예시사진이 등록되어 있지 않습니다.
+        </div>
+      `;
+      text.textContent=
+        `${vehicleLabel(G.vehicleType)} ${label} 가이드가 없어 촬영은 가능하지만, 관리자에게 정상 예시 등록을 요청해 주세요.`;
+      return;
+    }
+
+    body.innerHTML=`
+      <img
+        src="${escapeAttr(guide.example.image_url)}"
+        alt="${vehicleLabel(G.vehicleType)} ${label} 정상 촬영 예시"
+        loading="lazy"
+      >
+    `;
+
+    const guideText=String(guide.sticker?.guide_text||"").trim();
+
+    text.innerHTML=guideText
+      ? `<b>촬영 기준:</b> ${escapeHtml(guideText)}`
+      : `<b>촬영 기준:</b> 위 예시처럼 번호판과 홍보스티커가 한 장에 충분히 크게 보이도록 촬영해 주세요.`;
+  }
+
+  function findGuideForSide(side,vehicleType){
+    const sticker=findStickerForSide(side,vehicleType);
+    if(!sticker)return null;
+
+    const exact=(Array.isArray(sticker.examples)?sticker.examples:[])
+      .filter(e=>String(e.vehicle_type||"")===vehicleType);
+
+    if(!exact.length)return{sticker,example:null};
+
+    const example=
+      exact.find(e=>Number(e.is_guide)===1 && e.calibrated) ||
+      exact.find(e=>e.calibrated) ||
+      exact.find(e=>Number(e.is_guide)===1) ||
+      exact[0];
+
+    return{sticker,example};
+  }
+
+  function vehicleLabel(value){
+    return value==="k3"
+      ?"K3"
+      :(value==="avante"
+        ?"아반떼"
+        :(value==="ev3"?"EV3":String(value||"")));
+  }
+
+  function escapeHtml(value){
+    return String(value??"").replace(/[&<>"']/g,c=>({
+      "&":"&amp;",
+      "<":"&lt;",
+      ">":"&gt;",
+      '"':"&quot;",
+      "'":"&#039;"
+    }[c]));
+  }
+
+  function escapeAttr(value){
+    return escapeHtml(value);
+  }
+
 
   function findStickerForSide(side,vehicleType){
     const stickers=Array.isArray(G.config?.stickers)?G.config.stickers:[];

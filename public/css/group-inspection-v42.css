@@ -133,3 +133,62 @@
   .group-result-toolbar{flex-direction:column}
   .group-result-toolbar .result-top-actions{width:100%;flex-wrap:wrap}
 }
+
+
+/* V42.3 vehicle/side-specific photo guide */
+.group-guide-card{
+  margin-top:12px;
+  margin-bottom:12px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:12px;
+  background:#f8fafc;
+}
+.group-guide-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:10px;
+}
+.group-guide-head>div{
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+.group-guide-body{
+  width:100%;
+  overflow:hidden;
+  border-radius:12px;
+  background:#eef1f5;
+  border:1px solid var(--line);
+}
+.group-guide-body img{
+  display:block;
+  width:100%;
+  max-height:430px;
+  object-fit:contain;
+  background:#111;
+}
+.group-guide-placeholder{
+  display:flex;
+  min-height:160px;
+  align-items:center;
+  justify-content:center;
+  padding:18px;
+  text-align:center;
+  color:#647084;
+  line-height:1.5;
+}
+.group-guide-placeholder.warn{
+  color:#8b5e16;
+  background:#fff9ed;
+}
+.group-guide-text{
+  margin-top:10px;
+}
+@media(max-width:760px){
+  .group-guide-body img{
+    max-height:52vh;
+  }
+}
