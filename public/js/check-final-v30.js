@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const FINAL_ENGINE="final-presence-v6-broad-roi";
+  const FINAL_ENGINE="final-presence-v7-color-structure-first";
   const PLATE_HANGUL=
     "가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호";
 
@@ -34,15 +34,131 @@
       );
     }
 
-    const cvReady=await waitForOpenCv(10000);
-
-    if(!cvReady){
-      return finalUnavailable(
-        "영상 분석모듈을 불러오지 못해 자동판정을 확정하지 않았습니다."
-      );
-    }
-
     try{
+      const firstExample=candidateExamples[0]||null;
+      const firstBroadBox=firstExample
+        ? buildBroadStickerSearchBox(snapshot,firstExample)
+        : broadFallbackFromPlate(
+            snapshot?.plateSelection,
+            snapshot?.sticker?.side_hint
+          );
+
+      const colorPresence=detectColorStructurePresence(
+        snapshot.photoImage,
+        firstBroadBox,
+        snapshot?.sticker
+      );
+
+      // 색상+최소구조가 명확하면 무거운 ORB를 돌리지 않습니다.
+      if(colorPresence.pass){
+        let rearPosition={
+          position:"not-applicable",
+          method:"color-structure",
+          value:null
+        };
+
+        if(snapshot.sticker.side_hint==="rear"){
+          const cvReady=await waitForOpenCv(8000);
+
+          if(!cvReady){
+            return finalUnavailable(
+              "후면 위치 확인을 위한 영상 분석모듈을 불러오지 못했습니다."
+            );
+          }
+
+          const referenceImage=await loadImage(firstExample.image_url);
+          rearPosition=await determineRearSide(
+            snapshot,
+            firstExample,
+            referenceImage,
+            colorPresence.center
+          );
+        }
+
+        const metrics={
+          finalPresenceV1:true,
+          finalPresenceV2:true,
+          finalPresenceV3:true,
+          finalPresenceV7:true,
+          analysisEngine:FINAL_ENGINE,
+          vehicleType:snapshot.vehicleType,
+          sideHint:snapshot.sticker.side_hint,
+          stickerDetected:true,
+          missing:false,
+          presenceMethod:"color-structure",
+          presenceColorFamily:colorPresence.family,
+          presenceColorScore:round1(colorPresence.score*100),
+          presenceUsedBroadRoi:true,
+          presenceBroadSearchBox:firstBroadBox||null,
+          detectedStickerBox:colorPresence.box||null,
+          detectedStickerCenter:colorPresence.center||null,
+          presenceReferenceAttempts:0,
+          presenceAnalysisTimedOut:false,
+          rearPosition:rearPosition.position,
+          rearPositionMethod:rearPosition.method,
+          rearPositionValue:Number.isFinite(rearPosition.value)
+            ? round1(rearPosition.value)
+            : null,
+          simpleInspectionV25:true,
+          damage:0,
+          confidence:round1(colorPresence.score*100),
+          rearLogoRight:rearPosition.position==="right",
+          rearSizeDifference:null
+        };
+
+        if(snapshot.sticker.side_hint==="rear"){
+          if(rearPosition.position==="left"){
+            return{
+              crop:null,
+              analysis:{
+                score:40,
+                status:"확인필요",
+                recommendation:"부착위치 확인",
+                findings:[
+                  "스티커 존재 확인 · 후면 좌우 위치 이상 → 정상 위치와 반대쪽에 부착된 것으로 판단됩니다."
+                ],
+                metrics
+              }
+            };
+          }
+
+          if(rearPosition.position!=="right"){
+            return{
+              crop:null,
+              analysis:{
+                score:30,
+                status:"판정불가",
+                recommendation:"관리자 확인",
+                findings:[
+                  "스티커 존재는 확인되었으나 후면 좌우 위치를 안정적으로 확정하지 못했습니다."
+                ],
+                metrics
+              }
+            };
+          }
+        }
+
+        return{
+          crop:null,
+          analysis:{
+            score:100,
+            status:"정상",
+            recommendation:"",
+            findings:[
+              "스티커 검출 → 색상과 최소 구조조건으로 스티커 존재가 확인되었습니다."
+            ],
+            metrics
+          }
+        };
+      }
+
+      const cvReady=await waitForOpenCv(10000);
+
+      if(!cvReady){
+        return finalUnavailable(
+          "영상 분석모듈을 불러오지 못해 자동판정을 확정하지 않았습니다."
+        );
+      }
       let best=null;
       let attemptedExamples=0;
       const analysisStarted=performance.now();
@@ -135,6 +251,7 @@
         presenceGeometryScore:round1((presence.geometryScore||0)*100),
         presencePreprocessMode:presence.preprocessMode||null,
         presenceSearchStage:presence.searchStage||null,
+        presenceMethod:"orb-fallback",
         presenceUsedBroadRoi:presence.usedBroadRoi===true,
         presenceBroadSearchBox:presence.broadSearchBox||null,
         detectedStickerBox:presence.projectedStickerBox||null,
@@ -161,7 +278,7 @@
             status:"확인필요",
             recommendation:"미부착 여부 확인",
             findings:[
-              "스티커 미검출 → 번호판 기준의 넓은 차량영역과 전체사진 fallback을 분석했으나 스티커 존재를 확인하지 못했습니다."
+              "스티커 미검출 → 색상·최소구조 확인과 ORB 보조분석 모두에서 스티커 존재를 확인하지 못했습니다."
             ],
             metrics
           }
@@ -176,7 +293,7 @@
             status:"정상",
             recommendation:"",
             findings:[
-              "스티커 검출 → 넓은 후보영역의 다중 스케일 분석에서 스티커 존재가 확인되었습니다."
+              "스티커 검출 → 색상·최소구조 또는 ORB 보조분석에서 스티커 존재가 확인되었습니다."
             ],
             metrics:{
               ...metrics,
@@ -251,6 +368,297 @@
       );
     }
   };
+
+
+  function expectedStickerFamily(sticker){
+    const name=String(sticker?.name||sticker?.title||"").toLowerCase();
+    const hint=String(sticker?.side_hint||"").toLowerCase();
+
+    if(
+      name.includes("운전") ||
+      hint.includes("driver") ||
+      hint==="left" ||
+      hint.includes("driver_side")
+    ){
+      return"bgf-green";
+    }
+
+    if(
+      name.includes("조수") ||
+      name.includes("후면") ||
+      hint==="rear" ||
+      hint.includes("passenger") ||
+      hint==="right"
+    ){
+      return"nice-cu";
+    }
+
+    // 모르는 면에서는 색상만으로 정상 확정하지 않고 ORB fallback으로 넘깁니다.
+    return"unknown";
+  }
+
+  function detectColorStructurePresence(photoImage,broadBox,sticker){
+    const family=expectedStickerFamily(sticker);
+
+    if(family==="unknown"||!validBox(broadBox)){
+      return{
+        pass:false,
+        family,
+        score:0,
+        center:null,
+        box:null
+      };
+    }
+
+    const search=buildSearchImage(photoImage,broadBox,900);
+    const source=search.image;
+    const sw=Number(source.naturalWidth||source.width||0);
+    const sh=Number(source.naturalHeight||source.height||0);
+
+    if(!sw||!sh){
+      return{pass:false,family,score:0,center:null,box:null};
+    }
+
+    const targetW=Math.min(420,sw);
+    const scale=targetW/sw;
+    const targetH=Math.max(1,Math.round(sh*scale));
+    const c=document.createElement("canvas");
+    c.width=targetW;
+    c.height=targetH;
+
+    const ctx=c.getContext("2d",{willReadFrequently:true});
+    ctx.drawImage(source,0,0,targetW,targetH);
+
+    const data=ctx.getImageData(0,0,targetW,targetH).data;
+    const green=new Uint8Array(targetW*targetH);
+    const purple=new Uint8Array(targetW*targetH);
+
+    for(let i=0,p=0;i<data.length;i+=4,p++){
+      const r=data[i];
+      const g=data[i+1];
+      const b=data[i+2];
+      const max=Math.max(r,g,b);
+      const min=Math.min(r,g,b);
+      const sat=max?((max-min)/max):0;
+
+      // BGF/말풍선 계열: 조명차를 고려하되 G가 분명히 우세한 픽셀만.
+      if(
+        g>=58 &&
+        sat>=.16 &&
+        g-r>=10 &&
+        g-b>=5
+      ){
+        green[p]=1;
+      }
+
+      // CU 보라색: B/R가 G보다 분명히 높은 영역.
+      if(
+        b>=62 &&
+        r>=48 &&
+        sat>=.16 &&
+        b-g>=14 &&
+        r-g>=5
+      ){
+        purple[p]=1;
+      }
+    }
+
+    const gi=buildIntegralMask(green,targetW,targetH);
+    const pi=buildIntegralMask(purple,targetW,targetH);
+    const widths=[.14,.20,.27,.35,.44];
+    const heights=[.08,.11,.15,.20,.26];
+
+    let best=null;
+
+    for(const wf of widths){
+      for(const hf of heights){
+        const ww=Math.max(10,Math.round(targetW*wf));
+        const hh=Math.max(8,Math.round(targetH*hf));
+        const stepX=Math.max(4,Math.round(ww*.20));
+        const stepY=Math.max(4,Math.round(hh*.24));
+
+        for(let y=0;y+hh<=targetH;y+=stepY){
+          for(let x=0;x+ww<=targetW;x+=stepX){
+            const cx=(x+ww/2)/targetW;
+            const cy=(y+hh/2)/targetH;
+
+            // 넓은 ROI의 가장자리 배경간판은 우선 제외.
+            if(cx<.10||cx>.90||cy<.10||cy>.90)continue;
+
+            const area=ww*hh;
+            const gCount=rectIntegralSum(gi,targetW+1,x,y,ww,hh);
+            const pCount=rectIntegralSum(pi,targetW+1,x,y,ww,hh);
+            const gRatio=gCount/area;
+            const pRatio=pCount/area;
+
+            let score=0;
+            let pass=false;
+
+            if(family==="bgf-green"){
+              // 글자형 스티커는 픽셀 점유율이 낮으므로 '가로로 퍼져 있음'을 추가 확인.
+              const thirds=[
+                rectIntegralSum(gi,targetW+1,x,y,Math.floor(ww/3),hh),
+                rectIntegralSum(gi,targetW+1,x+Math.floor(ww/3),y,Math.floor(ww/3),hh),
+                rectIntegralSum(
+                  gi,targetW+1,
+                  x+Math.floor(ww*2/3),y,
+                  ww-Math.floor(ww*2/3),hh
+                )
+              ];
+              const activeThirds=thirds.filter(v=>v>=Math.max(3,area*.004)).length;
+
+              score=
+                clamp(gRatio/.055,0,1)*.62+
+                clamp(activeThirds/3,0,1)*.25+
+                (1-Math.min(1,Math.hypot(cx-.5,cy-.5)/.72))*.13;
+
+              pass=
+                gCount>=24 &&
+                gRatio>=.018 &&
+                activeThirds>=2 &&
+                ww/hh>=1.25 &&
+                score>=.60;
+            }else{
+              if(
+                gCount>=12 &&
+                pCount>=18 &&
+                gRatio>=.007 &&
+                pRatio>=.012
+              ){
+                const centroids=colorCentroidsInWindow(
+                  green,purple,targetW,targetH,x,y,ww,hh
+                );
+
+                const aligned=
+                  centroids.green &&
+                  centroids.purple &&
+                  Math.abs(centroids.green[1]-centroids.purple[1])<=hh*.42;
+
+                const order=
+                  centroids.green &&
+                  centroids.purple &&
+                  centroids.purple[0]>centroids.green[0]-ww*.12;
+
+                const separation=centroids.green&&centroids.purple
+                  ? Math.abs(centroids.purple[0]-centroids.green[0])/ww
+                  : 0;
+
+                score=
+                  clamp(gRatio/.035,0,1)*.25+
+                  clamp(pRatio/.055,0,1)*.37+
+                  (aligned?.20:0)+
+                  (order?.10:0)+
+                  clamp(separation/.22,0,1)*.08;
+
+                pass=
+                  aligned &&
+                  order &&
+                  score>=.61;
+              }
+            }
+
+            if(!pass)continue;
+
+            if(!best||score>best.score){
+              best={x,y,width:ww,height:hh,score};
+            }
+          }
+        }
+      }
+    }
+
+    if(!best){
+      return{pass:false,family,score:0,center:null,box:null};
+    }
+
+    const localBox={
+      x:best.x/targetW,
+      y:best.y/targetH,
+      width:best.width/targetW,
+      height:best.height/targetH
+    };
+
+    const mapped=mapSearchBoxToPhoto(
+      localBox,
+      search,
+      photoImage
+    );
+
+    const iw=Number(photoImage.naturalWidth||photoImage.width||1);
+    const ih=Number(photoImage.naturalHeight||photoImage.height||1);
+    const center=mapped
+      ?[
+          (mapped.x+mapped.width/2)*iw,
+          (mapped.y+mapped.height/2)*ih
+        ]
+      :null;
+
+    return{
+      pass:true,
+      family,
+      score:best.score,
+      center,
+      box:mapped
+    };
+  }
+
+  function buildIntegralMask(mask,w,h){
+    const out=new Uint32Array((w+1)*(h+1));
+
+    for(let y=1;y<=h;y++){
+      let row=0;
+
+      for(let x=1;x<=w;x++){
+        row+=mask[(y-1)*w+(x-1)];
+        out[y*(w+1)+x]=out[(y-1)*(w+1)+x]+row;
+      }
+    }
+
+    return out;
+  }
+
+  function rectIntegralSum(integral,stride,x,y,w,h){
+    const x2=x+w;
+    const y2=y+h;
+
+    return(
+      integral[y2*stride+x2]-
+      integral[y*stride+x2]-
+      integral[y2*stride+x]+
+      integral[y*stride+x]
+    );
+  }
+
+  function colorCentroidsInWindow(green,purple,W,H,x,y,w,h){
+    let gx=0,gy=0,gc=0;
+    let px=0,py=0,pc=0;
+
+    for(let yy=y;yy<y+h&&yy<H;yy++){
+      const row=yy*W;
+
+      for(let xx=x;xx<x+w&&xx<W;xx++){
+        const i=row+xx;
+
+        if(green[i]){
+          gx+=xx;
+          gy+=yy;
+          gc++;
+        }
+
+        if(purple[i]){
+          px+=xx;
+          py+=yy;
+          pc++;
+        }
+      }
+    }
+
+    return{
+      green:gc?[gx/gc,gy/gc]:null,
+      purple:pc?[px/pc,py/pc]:null
+    };
+  }
+
 
   async function orbLocateObject(referenceCanvas,photoImage,broadSearchBox=null){
     // 원칙:
