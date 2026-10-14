@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const FINAL_ENGINE="final-presence-v4-field-calibrated";
+  const FINAL_ENGINE="final-presence-v5-fast-progressive";
   const PLATE_HANGUL=
     "가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호";
 
@@ -44,13 +44,22 @@
 
     try{
       let best=null;
+      let attemptedExamples=0;
+      const analysisStarted=performance.now();
 
-      // 동일 차종 정상예시를 모두 시도합니다.
+      // 동일 차종 정상예시는 순차 시도하되, 존재가 확인되면 즉시 종료합니다.
       // 한 장의 예시 각도에만 종속되지 않도록 가장 강한 정합 결과를 사용합니다.
       for(const example of candidateExamples){
         let referenceImage=null;
 
+        // 느린 단말에서도 분석이 끝없이 늘어지지 않도록 전체 분석시간을 제한합니다.
+        if(best && performance.now()-analysisStarted>15000){
+          best.presence.analysisTimedOut=true;
+          break;
+        }
+
         try{
+          attemptedExamples++;
           referenceImage=await loadImage(example.image_url);
 
           const referenceStickerBox={
@@ -68,7 +77,7 @@
             1200
           );
 
-          const presence=orbLocateObject(
+          const presence=await orbLocateObject(
             referenceSticker,
             snapshot.photoImage
           );
@@ -81,6 +90,11 @@
 
           if(!best || rank>best.rank){
             best={example,referenceImage,presence,rank};
+          }
+
+          // 존재판정이 목적이므로 정상 검출 시 나머지 정상예시를 추가 분석하지 않습니다.
+          if(presence.pass){
+            break;
           }
         }catch(error){
           console.warn("normal example matching failed",error);
@@ -114,8 +128,10 @@
         presenceGeometryValid:presence.geometryValid===true,
         presenceGeometryScore:round1((presence.geometryScore||0)*100),
         presencePreprocessMode:presence.preprocessMode||null,
+        presenceSearchStage:presence.searchStage||null,
         detectedStickerBox:presence.projectedStickerBox||null,
-        presenceReferenceAttempts:candidateExamples.length,
+        presenceReferenceAttempts:attemptedExamples,
+        presenceAnalysisTimedOut:presence.analysisTimedOut===true,
         detectedStickerCenter:presence.center||null,
         rearPosition:"not-applicable",
         rearPositionMethod:null,
@@ -228,37 +244,59 @@
     }
   };
 
-  function orbLocateObject(referenceCanvas,photoImage){
-    // 현장사진 기준: 거리 차이는 다중 스케일, 조명 차이는 raw/CLAHE 두 경로로 보정합니다.
-    const searchSizes=[1400,1920,2400];
-    const preprocessModes=["raw","clahe"];
+  async function orbLocateObject(referenceCanvas,photoImage){
+    // 빠른 경로부터 시작하고 실패할 때만 단계적으로 고비용 분석을 사용합니다.
+    // 정상사진 대부분은 1~2단계에서 끝나도록 설계합니다.
+    const stages=[
+      {maxSide:1400,mode:"raw",features:2800,refMax:620},
+      {maxSide:1920,mode:"raw",features:3800,refMax:700},
+      {maxSide:1920,mode:"clahe",features:4200,refMax:700},
+      {maxSide:2400,mode:"raw",features:4800,refMax:760},
+      {maxSide:2400,mode:"clahe",features:5200,refMax:760}
+    ];
+
+    const started=performance.now();
     let best=null;
 
-    for(const maxSide of searchSizes){
-      for(const mode of preprocessModes){
-        const result=orbLocateObjectAtScale(
-          referenceCanvas,
-          photoImage,
-          maxSide,
-          mode
-        );
+    for(let i=0;i<stages.length;i++){
+      const stage=stages[i];
 
-        const rank=
-          (result.pass ? 100000 : 0)+
-          Number(result.inliers||0)*150+
-          Number(result.goodMatches||0)*10+
-          Number(result.geometryScore||0)*1200-
-          Math.min(999,Number(result.topMeanDistance||999))*2;
+      const result=orbLocateObjectAtScale(
+        referenceCanvas,
+        photoImage,
+        stage.maxSide,
+        stage.mode,
+        stage.features,
+        stage.refMax
+      );
 
-        if(!best || rank>best.rank){
-          best={...result,rank};
-        }
+      result.searchStage=i+1;
 
-        // 강한 검출은 즉시 종료합니다.
-        if(result.pass && result.inliers>=8 && result.geometryScore>=.55){
-          return result;
-        }
+      const rank=
+        (result.pass ? 100000 : 0)+
+        Number(result.inliers||0)*150+
+        Number(result.goodMatches||0)*10+
+        Number(result.geometryScore||0)*1200-
+        Math.min(999,Number(result.topMeanDistance||999))*2;
+
+      if(!best || rank>best.rank){
+        best={...result,rank};
       }
+
+      // V37과 달리 이미 통과조건을 만족하면 즉시 종료합니다.
+      // presencePass 자체가 RANSAC + 투영형상 검증을 포함하므로 추가 반복이 불필요합니다.
+      if(result.pass){
+        return result;
+      }
+
+      // 한 장에서 장시간 분석이 이어지는 것을 차단합니다.
+      if(performance.now()-started>9000){
+        if(best)best.analysisTimedOut=true;
+        break;
+      }
+
+      // 다음 고비용 단계 전에 브라우저가 UI/네트워크를 처리할 시간을 줍니다.
+      await new Promise(resolve=>setTimeout(resolve,0));
     }
 
     if(best){
@@ -279,13 +317,15 @@
       geometryValid:false,
       geometryScore:0,
       preprocessMode:null,
+      searchStage:null,
+      analysisTimedOut:false,
       searchMaxSide:null
     };
   }
 
-  function orbLocateObjectAtScale(referenceCanvas,photoImage,targetMaxSide,preprocessMode="raw"){
+  function orbLocateObjectAtScale(referenceCanvas,photoImage,targetMaxSide,preprocessMode="raw",maxFeatures=4000,referenceMaxSide=700){
     const photo=fitImageToTargetMaxSide(photoImage,targetMaxSide);
-    const ref=fitCanvasMaxSide(referenceCanvas,900);
+    const ref=fitCanvasMaxSide(referenceCanvas,referenceMaxSide);
 
     let src=null,dst=null,g1=null,g2=null;
     let mask1=null,mask2=null,kp1=null,kp2=null;
@@ -314,7 +354,7 @@
       des2=new cv.Mat();
 
       // 존재 여부가 핵심이므로 작은 글자형 스티커에서도 특징점을 최대한 확보합니다.
-      orb=new cv.ORB(8000);
+      orb=new cv.ORB(Math.max(1800,Number(maxFeatures)||4000));
       orb.detectAndCompute(g1,mask1,kp1,des1);
       orb.detectAndCompute(g2,mask2,kp2,des2);
 
@@ -341,6 +381,8 @@
           geometryValid:false,
           geometryScore:0,
           preprocessMode,
+          searchStage:null,
+          analysisTimedOut:false,
           searchMaxSide:targetMaxSide
         };
       }
@@ -392,6 +434,8 @@
           geometryValid:false,
           geometryScore:0,
           preprocessMode,
+          searchStage:null,
+          analysisTimedOut:false,
           searchMaxSide:targetMaxSide
         };
       }
@@ -522,6 +566,8 @@
         geometryScore,
         projectedStickerBox:projected?.box||null,
         preprocessMode,
+        searchStage:null,
+        analysisTimedOut:false,
         searchMaxSide:targetMaxSide
       };
 
