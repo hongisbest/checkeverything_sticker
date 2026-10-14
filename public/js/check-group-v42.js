@@ -13,6 +13,8 @@
     activeIndex:0,
     submitting:false,
     analysisRunning:false,
+    cameraStream:null,
+    cameraSide:"",
     sides:{
       driver:{file:null,image:null,url:null,plate:null},
       passenger:{file:null,image:null,url:null,plate:null},
@@ -103,10 +105,10 @@
     });
 
     SIDES.forEach((s,i)=>{
-      const input=$(`groupFile-${s.key}`);
-      if(!input)return;
+      const button=$(`groupCameraBtn-${s.key}`);
+      if(!button)return;
 
-      input.disabled=
+      button.disabled=
         !verified ||
         !G.vehicleType ||
         i>G.activeIndex;
@@ -153,10 +155,9 @@
           </div>
         </div>
 
-        <label class="btn primary full group-photo-button">
-          ${s.label} 사진 촬영 / 선택
-          <input id="groupFile-${s.key}" type="file" accept="image/*" hidden disabled>
-        </label>
+        <button id="groupCameraBtn-${s.key}" class="btn primary full group-photo-button" type="button" disabled>
+          ${s.label} 카메라 촬영
+        </button>
 
         <div id="groupSelection-${s.key}" class="group-selection hidden">
           <div class="message info">
@@ -178,24 +179,93 @@
     `).join("");
 
     SIDES.forEach((s,i)=>{
-      $(`groupFile-${s.key}`).addEventListener("change",e=>onFile(s.key,e.target.files?.[0]));
+      $(`groupCameraBtn-${s.key}`).addEventListener("click",()=>openGroupCamera(s.key,s.label));
       $(`groupReset-${s.key}`).addEventListener("click",()=>resetPlate(s.key));
       $(`groupNext-${s.key}`).addEventListener("click",()=>completeStep(i));
       bindPlateDrawing(s.key);
     });
 
+    $("groupCameraCloseBtn")?.addEventListener("click",closeGroupCamera);
+    $("groupCameraCaptureBtn")?.addEventListener("click",captureGroupCameraPhoto);
     $("groupSubmitBtn").addEventListener("click",submitGroup);
+    $("groupReturnHomeBtn")?.addEventListener("click",returnToStart);
+    window.addEventListener("pagehide",stopGroupCamera);
   }
 
-  async function onFile(side,file){
-    if(!file)return;
-    if(!String(file.type||"").startsWith("image/")){
-      setMessage("이미지 파일만 선택해 주세요.","error");
+  async function openGroupCamera(side,label){
+    if(!navigator.mediaDevices?.getUserMedia){
+      setMessage("현재 브라우저에서 카메라 직접촬영을 지원하지 않습니다.","error");
       return;
     }
 
-    const state=G.sides[side];
+    G.cameraSide=side;
+    $("groupCameraTitle").textContent=`${label} 점검사진 촬영`;
+    $("groupCameraMessage").className="message info";
+    $("groupCameraMessage").textContent="후면 카메라를 준비하고 있습니다.";
+    $("groupCameraCaptureBtn").disabled=true;
+    $("groupCameraModal").classList.remove("hidden");
+    document.body.classList.add("group-modal-open");
 
+    try{
+      stopGroupCamera();
+      const stream=await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}},
+        audio:false
+      });
+      G.cameraStream=stream;
+      const video=$("groupCameraVideo");
+      video.srcObject=stream;
+      await video.play();
+      $("groupCameraMessage").className="message success";
+      $("groupCameraMessage").textContent="가이드와 비슷한 거리·각도로 번호판과 스티커가 함께 보이게 촬영해 주세요.";
+      $("groupCameraCaptureBtn").disabled=false;
+    }catch(error){
+      stopGroupCamera();
+      $("groupCameraMessage").className="message error";
+      $("groupCameraMessage").textContent="카메라를 열 수 없습니다. 브라우저의 카메라 권한을 허용한 뒤 다시 시도해 주세요.";
+    }
+  }
+
+  function stopGroupCamera(){
+    if(G.cameraStream){
+      G.cameraStream.getTracks().forEach(track=>{try{track.stop()}catch{}});
+    }
+    G.cameraStream=null;
+    const video=$("groupCameraVideo");
+    if(video){
+      try{video.pause()}catch{}
+      video.srcObject=null;
+    }
+  }
+
+  function closeGroupCamera(){
+    stopGroupCamera();
+    G.cameraSide="";
+    $("groupCameraModal")?.classList.add("hidden");
+    document.body.classList.remove("group-modal-open");
+  }
+
+  async function captureGroupCameraPhoto(){
+    const side=G.cameraSide;
+    const video=$("groupCameraVideo");
+    if(!side||!G.cameraStream||!video?.videoWidth||!video?.videoHeight)return;
+
+    const canvas=$("groupCameraCanvas");
+    canvas.width=video.videoWidth;
+    canvas.height=video.videoHeight;
+    canvas.getContext("2d").drawImage(video,0,0,canvas.width,canvas.height);
+
+    const blob=await new Promise((resolve,reject)=>{
+      canvas.toBlob(b=>b?resolve(b):reject(new Error("카메라 사진 생성 실패")),"image/jpeg",.92);
+    });
+
+    const file=new File([blob],`${side}-${Date.now()}.jpg`,{type:"image/jpeg",lastModified:Date.now()});
+    await applyCapturedPhoto(side,file);
+    closeGroupCamera();
+  }
+
+  async function applyCapturedPhoto(side,file){
+    const state=G.sides[side];
     if(state.url)URL.revokeObjectURL(state.url);
     state.file=file;
     state.url=URL.createObjectURL(file);
@@ -211,6 +281,7 @@
     $(`groupNext-${side}`).disabled=true;
     setSideState(side,"번호판 지정","review");
     updateSubmitState();
+    $(`groupSelection-${side}`).scrollIntoView({behavior:"smooth",block:"start"});
   }
 
   function bindPlateDrawing(side){
@@ -298,11 +369,8 @@
       const st=G.sides[s.key];
       if(st.url)URL.revokeObjectURL(st.url);
       G.sides[s.key]={file:null,image:null,url:null,plate:null};
-      const input=$(`groupFile-${s.key}`);
-      if(input){
-        input.value="";
-        input.disabled=true;
-      }
+      const cameraButton=$(`groupCameraBtn-${s.key}`);
+      if(cameraButton)cameraButton.disabled=true;
       $(`groupSelection-${s.key}`)?.classList.add("hidden");
       $(`groupPlate-${s.key}`)?.classList.add("hidden");
       $(`groupCard-${s.key}`)?.classList.toggle("locked",i!==0);
@@ -438,10 +506,14 @@
         }
       }));
 
+      const completedReceipt=finalized.receipt_no||uploadSession.receipt_no;
+
       setMessage(
-        `제출 완료 · 접수번호 ${finalized.receipt_no||uploadSession.receipt_no}. 운전석·조수석·후면 사진 3장이 모두 저장되었습니다.`,
+        `제출 완료 · 접수번호 ${completedReceipt}. 운전석·조수석·후면 사진 3장이 모두 저장되었습니다.`,
         "success"
       );
+
+      showSubmitSuccessModal(profile.employee_name,profile.vehicle_no,completedReceipt);
 
       $("groupSubmitBtn").textContent="제출 완료";
 
@@ -454,11 +526,6 @@
         ()=>runBackgroundAnalysis(inspectionId,snapshots),
         50
       );
-
-      setTimeout(()=>{
-        resetAllSides();
-        $("groupSubmitBtn").textContent="차량 점검 1건으로 제출";
-      },1200);
 
       // finalize 이후에는 abort하면 안 됩니다.
       uploadSession=null;
@@ -492,6 +559,38 @@
       G.submitting=false;
       updateSubmitState();
     }
+  }
+
+  function showSubmitSuccessModal(name,vehicleNo,receiptNo){
+    $("groupSubmitSuccessText").textContent=`${name}님 ${vehicleNo} 점검사진 제출 완료되었습니다.`;
+    $("groupSubmitSuccessReceipt").textContent=receiptNo?`접수번호 ${receiptNo}`:"";
+    $("groupSubmitSuccessModal").classList.remove("hidden");
+    document.body.classList.add("group-modal-open");
+  }
+
+  function returnToStart(){
+    $("groupSubmitSuccessModal")?.classList.add("hidden");
+    document.body.classList.remove("group-modal-open");
+    resetAllSides();
+    G.vehicleType="";
+
+    document.querySelectorAll("#vehicleTabs .vehicle-tab").forEach(btn=>btn.classList.remove("active"));
+    refreshGuideCards();
+
+    const fields=[$("employeeName"),$("employeeId"),$("department"),$("vehicleNo")];
+    fields.forEach(node=>{if(node)node.value="";});
+
+    try{localStorage.removeItem("sticker_compare_profile")}catch{}
+    window.__vehicleRegistryVerified=false;
+
+    fields.forEach(node=>{
+      if(!node)return;
+      node.dispatchEvent(new Event(node.tagName==="SELECT"?"change":"input",{bubbles:true}));
+    });
+
+    $("groupSubmitBtn").textContent="차량 점검 1건으로 제출";
+    updateSubmitState();
+    window.scrollTo({top:0,behavior:"smooth"});
   }
 
   async function uploadSideWithRetry(session,side,file,sticker,plate){

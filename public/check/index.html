@@ -12,7 +12,7 @@
 <link rel="stylesheet" href="/css/app.css?v=20.0.0">
 <link rel="stylesheet" href="/css/pc-layout-fix-v31.css?v=31.0.0">
 <link rel="stylesheet" href="/css/pwa-v32.css?v=32.0.0">
-<link rel="stylesheet" href="/css/group-inspection-v42.css?v=42.3.0">
+<link rel="stylesheet" href="/css/group-inspection-v42.css?v=42.9.0">
 <link rel="manifest" href="/check/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/bgf-check-apple-180.png">
 <link rel="icon" type="image/png" sizes="32x32" href="/icons/bgf-check-32.png">
@@ -285,6 +285,34 @@
   <div id="findings"></div>
 </section>
 
+
+<div id="groupSubmitSuccessModal" class="group-submit-success-modal hidden" role="dialog" aria-modal="true">
+  <div class="group-submit-success-backdrop"></div>
+  <div class="group-submit-success-panel">
+    <div class="group-submit-success-icon">✓</div>
+    <span class="step">SUBMISSION COMPLETE</span>
+    <h2>점검사진 제출 완료</h2>
+    <p id="groupSubmitSuccessText" class="group-submit-success-text"></p>
+    <p id="groupSubmitSuccessReceipt" class="group-submit-success-receipt"></p>
+    <button id="groupReturnHomeBtn" class="btn primary full" type="button">처음으로 돌아가기</button>
+  </div>
+</div>
+
+<div id="groupCameraModal" class="group-camera-modal hidden" role="dialog" aria-modal="true">
+  <div class="group-camera-backdrop"></div>
+  <div class="group-camera-panel">
+    <div class="group-camera-head">
+      <div><span class="step">CAMERA ONLY</span><h2 id="groupCameraTitle">점검사진 촬영</h2></div>
+      <button id="groupCameraCloseBtn" class="btn small" type="button">취소</button>
+    </div>
+    <div class="group-camera-notice">앨범 사진은 사용할 수 없습니다. 현재 카메라로 직접 촬영해 주세요.</div>
+    <div class="group-camera-stage"><video id="groupCameraVideo" autoplay playsinline muted></video></div>
+    <div id="groupCameraMessage" class="message info">후면 카메라를 준비하고 있습니다.</div>
+    <button id="groupCameraCaptureBtn" class="btn primary full" type="button" disabled>현재 화면 촬영</button>
+    <canvas id="groupCameraCanvas" class="hidden" aria-hidden="true"></canvas>
+  </div>
+</div>
+
 </main>
 <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 <script src="/js/check.js?v=31.3.0"></script>
@@ -292,6 +320,6 @@
 <script src="/js/check-vehicle-registry-v31.js?v=31.3.0"></script>
 <script src="/js/receipt-number-v33.js?v=33.0.0"></script>
 <script src="/js/pwa-install-v32.js?v=32.0.0"></script>
-<script src="/js/check-group-v42.js?v=42.6.0"></script>
+<script src="/js/check-group-v42.js?v=42.9.0"></script>
 </body>
 </html>
