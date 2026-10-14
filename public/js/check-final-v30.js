@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const FINAL_ENGINE="final-presence-v7-color-structure-first";
+  const FINAL_ENGINE="final-presence-v8-context-guard";
   const PLATE_HANGUL=
     "가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호";
 
@@ -49,8 +49,77 @@
         snapshot?.sticker
       );
 
-      // 색상+최소구조가 명확하면 무거운 ORB를 돌리지 않습니다.
+      // 색상 검출만으로 바로 정상 확정하지 않습니다.
+      // 동일 차종 + 동일 촬영면 정상예시의 "번호판~스티커 주변 차량영역"과
+      // 현재 사진의 같은 범위를 매우 느슨하게 비교합니다.
+      // 목적은 정상차량을 정밀 채점하는 것이 아니라,
+      // 전혀 다른 장면이 색상 우연으로 정상 처리되는 극단적 오탐만 차단하는 것입니다.
       if(colorPresence.pass){
+        const cvReady=await waitForOpenCv(8000);
+
+        let contextGate={
+          decision:"inconclusive",
+          tested:0,
+          strongMismatchCount:0,
+          bestInliers:0,
+          bestGoodMatches:0,
+          bestTopMeanDistance:999,
+          reason:"opencv-unavailable"
+        };
+
+        if(cvReady){
+          contextGate=await assessVehicleContextGate(
+            snapshot,
+            candidateExamples,
+            colorPresence
+          );
+        }
+
+        if(contextGate.decision==="mismatch"){
+          return{
+            crop:null,
+            analysis:{
+              score:25,
+              status:"판정불가",
+              recommendation:"촬영사진 확인",
+              findings:[
+                "동일 차종 정상예시와 번호판·스티커 주변 차량영역이 현저히 달라 자동 정상판정을 보류했습니다."
+              ],
+              metrics:{
+                finalPresenceV1:true,
+                finalPresenceV2:true,
+                finalPresenceV3:true,
+                finalPresenceV7:true,
+                finalPresenceV8:true,
+                analysisEngine:FINAL_ENGINE,
+                vehicleType:snapshot.vehicleType,
+                sideHint:snapshot.sticker.side_hint,
+                stickerDetected:true,
+                missing:false,
+                presenceMethod:"color-structure",
+                presenceColorFamily:colorPresence.family,
+                presenceColorScore:round1(colorPresence.score*100),
+                presenceUsedBroadRoi:true,
+                presenceBroadSearchBox:firstBroadBox||null,
+                detectedStickerBox:colorPresence.box||null,
+                detectedStickerCenter:colorPresence.center||null,
+                vehicleContextDecision:contextGate.decision,
+                vehicleContextTested:contextGate.tested,
+                vehicleContextStrongMismatchCount:contextGate.strongMismatchCount,
+                vehicleContextBestInliers:contextGate.bestInliers,
+                vehicleContextBestGoodMatches:contextGate.bestGoodMatches,
+                vehicleContextBestTopMeanDistance:round1(contextGate.bestTopMeanDistance),
+                vehicleContextReason:contextGate.reason||null,
+                simpleInspectionV25:true,
+                damage:0,
+                confidence:round1(colorPresence.score*100),
+                rearLogoRight:null,
+                rearSizeDifference:null
+              }
+            }
+          };
+        }
+
         let rearPosition={
           position:"not-applicable",
           method:"color-structure",
@@ -58,8 +127,6 @@
         };
 
         if(snapshot.sticker.side_hint==="rear"){
-          const cvReady=await waitForOpenCv(8000);
-
           if(!cvReady){
             return finalUnavailable(
               "후면 위치 확인을 위한 영상 분석모듈을 불러오지 못했습니다."
@@ -80,6 +147,7 @@
           finalPresenceV2:true,
           finalPresenceV3:true,
           finalPresenceV7:true,
+          finalPresenceV8:true,
           analysisEngine:FINAL_ENGINE,
           vehicleType:snapshot.vehicleType,
           sideHint:snapshot.sticker.side_hint,
@@ -92,6 +160,13 @@
           presenceBroadSearchBox:firstBroadBox||null,
           detectedStickerBox:colorPresence.box||null,
           detectedStickerCenter:colorPresence.center||null,
+          vehicleContextDecision:contextGate.decision,
+          vehicleContextTested:contextGate.tested,
+          vehicleContextStrongMismatchCount:contextGate.strongMismatchCount,
+          vehicleContextBestInliers:contextGate.bestInliers,
+          vehicleContextBestGoodMatches:contextGate.bestGoodMatches,
+          vehicleContextBestTopMeanDistance:round1(contextGate.bestTopMeanDistance),
+          vehicleContextReason:contextGate.reason||null,
           presenceReferenceAttempts:0,
           presenceAnalysisTimedOut:false,
           rearPosition:rearPosition.position,
@@ -145,7 +220,9 @@
             status:"정상",
             recommendation:"",
             findings:[
-              "스티커 검출 → 색상과 최소 구조조건으로 스티커 존재가 확인되었습니다."
+              contextGate.decision==="match"
+                ? "스티커 검출 · 동일 차종 주변 차량영역 확인 → 정상으로 판정했습니다."
+                : "스티커 검출 → 주변 차량영역 비교가 불충분해 기존 존재판정을 유지했습니다."
             ],
             metrics
           }
@@ -235,6 +312,7 @@
         finalPresenceV1:true,
         finalPresenceV2:true,
         finalPresenceV3:true,
+        finalPresenceV8:true,
         analysisEngine:FINAL_ENGINE,
         vehicleType:snapshot.vehicleType,
         sideHint:snapshot.sticker.side_hint,
@@ -657,6 +735,262 @@
       green:gc?[gx/gc,gy/gc]:null,
       purple:pc?[px/pc,py/pc]:null
     };
+  }
+
+
+
+  async function assessVehicleContextGate(snapshot,examples,colorPresence){
+    const currentPlate=snapshot?.plateSelection;
+    const currentSticker=colorPresence?.box;
+
+    if(!validBox(currentPlate)||!validBox(currentSticker)){
+      return{
+        decision:"inconclusive",
+        tested:0,
+        strongMismatchCount:0,
+        bestInliers:0,
+        bestGoodMatches:0,
+        bestTopMeanDistance:999,
+        reason:"current-context-missing"
+      };
+    }
+
+    const currentContext=buildVehicleContextBox(
+      currentPlate,
+      currentSticker,
+      snapshot?.sticker?.side_hint
+    );
+
+    if(!validBox(currentContext)){
+      return{
+        decision:"inconclusive",
+        tested:0,
+        strongMismatchCount:0,
+        bestInliers:0,
+        bestGoodMatches:0,
+        bestTopMeanDistance:999,
+        reason:"current-context-invalid"
+      };
+    }
+
+    const currentCanvas=cropNormalizedCanvas(
+      snapshot.photoImage,
+      currentContext,
+      760
+    );
+
+    let tested=0;
+    let strongMismatchCount=0;
+    let bestInliers=0;
+    let bestGoodMatches=0;
+    let bestTopMeanDistance=999;
+
+    // 차종/면 정상예시 중 최대 3장만 사용합니다.
+    // 하나라도 명확하게 맞으면 즉시 통과하고,
+    // 모든 유효 예시가 명백하게 다를 때만 mismatch로 차단합니다.
+    for(const example of (examples||[]).slice(0,3)){
+      const refPlate={
+        x:Number(example?.plate_x),
+        y:Number(example?.plate_y),
+        width:Number(example?.plate_width),
+        height:Number(example?.plate_height)
+      };
+      const refSticker={
+        x:Number(example?.crop_x),
+        y:Number(example?.crop_y),
+        width:Number(example?.crop_width),
+        height:Number(example?.crop_height)
+      };
+
+      if(
+        !example?.plate_calibrated ||
+        !validBox(refPlate) ||
+        !validBox(refSticker)
+      ){
+        continue;
+      }
+
+      try{
+        const referenceImage=await loadImage(example.image_url);
+        const referenceContext=buildVehicleContextBox(
+          refPlate,
+          refSticker,
+          snapshot?.sticker?.side_hint
+        );
+
+        if(!validBox(referenceContext))continue;
+
+        const referenceCanvas=cropNormalizedCanvas(
+          referenceImage,
+          referenceContext,
+          760
+        );
+
+        const result=orbLocateObjectAtScale(
+          referenceCanvas,
+          currentCanvas,
+          760,
+          "raw",
+          2200,
+          760
+        );
+
+        tested++;
+        bestInliers=Math.max(bestInliers,Number(result.inliers||0));
+        bestGoodMatches=Math.max(
+          bestGoodMatches,
+          Number(result.goodMatches||0)
+        );
+        bestTopMeanDistance=Math.min(
+          bestTopMeanDistance,
+          Number(result.topMeanDistance||999)
+        );
+
+        const strongMatch=
+          result.pass===true ||
+          (
+            Number(result.inliers||0)>=6 &&
+            Number(result.goodMatches||0)>=8 &&
+            Number(result.topMeanDistance||999)<=68
+          );
+
+        if(strongMatch){
+          return{
+            decision:"match",
+            tested,
+            strongMismatchCount,
+            bestInliers,
+            bestGoodMatches,
+            bestTopMeanDistance,
+            reason:"same-vehicle-context-found"
+          };
+        }
+
+        // 특징점 자체는 충분히 많은데 동일 차종 정상예시와의
+        // 대응점이 거의 없을 때만 '명백한 불일치'로 계산합니다.
+        // 특징점이 부족하거나 애매하면 정상차량을 잘못 탈락시키지 않도록
+        // inconclusive로 남깁니다.
+        const evidenceRich=
+          Number(result.referenceKeypoints||0)>=70 &&
+          Number(result.photoKeypoints||0)>=90;
+
+        const veryWeakCorrespondence=
+          Number(result.inliers||0)<=4 &&
+          Number(result.inlierRatio||0)<=.07 &&
+          (
+            result.geometryValid!==true ||
+            Number(result.geometryScore||0)<.38
+          );
+
+        if(evidenceRich&&veryWeakCorrespondence){
+          strongMismatchCount++;
+        }
+
+      }catch(error){
+        console.warn("vehicle context gate failed",error);
+      }
+    }
+
+    const allStronglyDifferent=
+      tested>=2 &&
+      strongMismatchCount===tested;
+
+    const singleExampleExtremelyDifferent=
+      tested===1 &&
+      strongMismatchCount===1 &&
+      bestInliers<=2;
+
+    if(allStronglyDifferent||singleExampleExtremelyDifferent){
+      return{
+        decision:"mismatch",
+        tested,
+        strongMismatchCount,
+        bestInliers,
+        bestGoodMatches,
+        bestTopMeanDistance,
+        reason:allStronglyDifferent
+          ?"all-context-examples-strongly-different"
+          :"single-context-example-extremely-different"
+      };
+    }
+
+    return{
+      decision:"inconclusive",
+      tested,
+      strongMismatchCount,
+      bestInliers,
+      bestGoodMatches,
+      bestTopMeanDistance,
+      reason:tested
+        ?"context-not-strong-enough-to-reject"
+        :"no-plate-calibrated-context-example"
+    };
+  }
+
+  function buildVehicleContextBox(plateBox,stickerBox,sideHint){
+    if(!validBox(plateBox)||!validBox(stickerBox))return null;
+
+    const minX=Math.min(
+      Number(plateBox.x),
+      Number(stickerBox.x)
+    );
+    const minY=Math.min(
+      Number(plateBox.y),
+      Number(stickerBox.y)
+    );
+    const maxX=Math.max(
+      Number(plateBox.x)+Number(plateBox.width),
+      Number(stickerBox.x)+Number(stickerBox.width)
+    );
+    const maxY=Math.max(
+      Number(plateBox.y)+Number(plateBox.height),
+      Number(stickerBox.y)+Number(stickerBox.height)
+    );
+
+    const unionW=Math.max(.02,maxX-minX);
+    const unionH=Math.max(.02,maxY-minY);
+    const rear=sideHint==="rear";
+
+    // 배경까지 끌어들이지 않도록 번호판+스티커를 포함하는 범위에만
+    // 약간의 여백을 줍니다. 이 박스는 '차량 구조 정밀판정'용이 아니라
+    // 전혀 다른 장면을 걸러내는 약한 context gate 전용입니다.
+    const padX=Math.max(rear?.035:.05,unionW*(rear?.20:.24));
+    const padY=Math.max(rear?.035:.05,unionH*(rear?.22:.26));
+
+    return clampBox({
+      x:minX-padX,
+      y:minY-padY,
+      width:unionW+padX*2,
+      height:unionH+padY*2
+    });
+  }
+
+  function cropNormalizedCanvas(image,box,maxSide=760){
+    const iw=Number(image?.naturalWidth||image?.width||0);
+    const ih=Number(image?.naturalHeight||image?.height||0);
+
+    if(!iw||!ih||!validBox(box)){
+      throw new Error("vehicle context crop source invalid");
+    }
+
+    const b=clampBox(box);
+    const sx=Math.max(0,Math.round(b.x*iw));
+    const sy=Math.max(0,Math.round(b.y*ih));
+    const sw=Math.max(1,Math.round(b.width*iw));
+    const sh=Math.max(1,Math.round(b.height*ih));
+    const scale=Math.min(1,maxSide/Math.max(sw,sh));
+
+    const canvas=document.createElement("canvas");
+    canvas.width=Math.max(1,Math.round(sw*scale));
+    canvas.height=Math.max(1,Math.round(sh*scale));
+
+    canvas.getContext("2d").drawImage(
+      image,
+      sx,sy,sw,sh,
+      0,0,canvas.width,canvas.height
+    );
+
+    return canvas;
   }
 
 
