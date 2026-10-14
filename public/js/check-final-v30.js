@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const FINAL_ENGINE="final-presence-v5-fast-progressive";
+  const FINAL_ENGINE="final-presence-v6-broad-roi";
   const PLATE_HANGUL=
     "가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호";
 
@@ -77,9 +77,15 @@
             1200
           );
 
+          const broadSearchBox=buildBroadStickerSearchBox(
+            snapshot,
+            example
+          );
+
           const presence=await orbLocateObject(
             referenceSticker,
-            snapshot.photoImage
+            snapshot.photoImage,
+            broadSearchBox
           );
 
           const rank=
@@ -129,6 +135,8 @@
         presenceGeometryScore:round1((presence.geometryScore||0)*100),
         presencePreprocessMode:presence.preprocessMode||null,
         presenceSearchStage:presence.searchStage||null,
+        presenceUsedBroadRoi:presence.usedBroadRoi===true,
+        presenceBroadSearchBox:presence.broadSearchBox||null,
         detectedStickerBox:presence.projectedStickerBox||null,
         presenceReferenceAttempts:attemptedExamples,
         presenceAnalysisTimedOut:presence.analysisTimedOut===true,
@@ -153,7 +161,7 @@
             status:"확인필요",
             recommendation:"미부착 여부 확인",
             findings:[
-              "스티커 미검출 → 동일 차종 정상예시를 거리·조명 조건별로 분석했으나 스티커 존재를 안정적으로 확인하지 못했습니다."
+              "스티커 미검출 → 번호판 기준의 넓은 차량영역과 전체사진 fallback을 분석했으나 스티커 존재를 확인하지 못했습니다."
             ],
             metrics
           }
@@ -168,7 +176,7 @@
             status:"정상",
             recommendation:"",
             findings:[
-              "스티커 검출 → 다중 스케일·조명 보정 분석에서 스티커 존재가 확인되었습니다."
+              "스티커 검출 → 넓은 후보영역의 다중 스케일 분석에서 스티커 존재가 확인되었습니다."
             ],
             metrics:{
               ...metrics,
@@ -244,59 +252,109 @@
     }
   };
 
-  async function orbLocateObject(referenceCanvas,photoImage){
-    // 빠른 경로부터 시작하고 실패할 때만 단계적으로 고비용 분석을 사용합니다.
-    // 정상사진 대부분은 1~2단계에서 끝나도록 설계합니다.
+  async function orbLocateObject(referenceCanvas,photoImage,broadSearchBox=null){
+    // 원칙:
+    // 1) 번호판은 스티커 위치를 '정밀 고정'하는 용도가 아니라,
+    //    차량 주변의 넓은 후보영역을 만드는 보조 기준으로만 사용합니다.
+    // 2) 후보영역에서 먼저 존재를 찾고, 실패하면 전체사진 저비용 fallback을 수행합니다.
+    // 3) 스티커 존재가 확인되면 즉시 종료합니다.
+
     const stages=[
-      {maxSide:1400,mode:"raw",features:2800,refMax:620},
-      {maxSide:1920,mode:"raw",features:3800,refMax:700},
-      {maxSide:1920,mode:"clahe",features:4200,refMax:700},
-      {maxSide:2400,mode:"raw",features:4800,refMax:760},
-      {maxSide:2400,mode:"clahe",features:5200,refMax:760}
+      {maxSide:1400,mode:"raw",features:2400,refMax:620},
+      {maxSide:1800,mode:"raw",features:3200,refMax:680},
+      {maxSide:1800,mode:"clahe",features:3600,refMax:680},
+      {maxSide:2200,mode:"raw",features:4200,refMax:740}
     ];
 
     const started=performance.now();
     let best=null;
 
-    for(let i=0;i<stages.length;i++){
-      const stage=stages[i];
+    const targets=[];
 
-      const result=orbLocateObjectAtScale(
-        referenceCanvas,
-        photoImage,
-        stage.maxSide,
-        stage.mode,
-        stage.features,
-        stage.refMax
-      );
+    if(validBox(broadSearchBox)){
+      targets.push({
+        imageInfo:buildSearchImage(photoImage,broadSearchBox,2600),
+        usedBroadRoi:true,
+        broadSearchBox
+      });
+    }
 
-      result.searchStage=i+1;
+    // 번호판 기반 후보영역이 어긋나는 예외를 대비해 전체사진 fallback은 반드시 남깁니다.
+    targets.push({
+      imageInfo:{
+        image:photoImage,
+        offsetX:0,
+        offsetY:0,
+        sourceScale:1
+      },
+      usedBroadRoi:false,
+      broadSearchBox:broadSearchBox||null
+    });
 
-      const rank=
-        (result.pass ? 100000 : 0)+
-        Number(result.inliers||0)*150+
-        Number(result.goodMatches||0)*10+
-        Number(result.geometryScore||0)*1200-
-        Math.min(999,Number(result.topMeanDistance||999))*2;
+    for(let targetIndex=0;targetIndex<targets.length;targetIndex++){
+      const target=targets[targetIndex];
 
-      if(!best || rank>best.rank){
-        best={...result,rank};
+      // ROI에서는 충분히 단계적으로 보고,
+      // 전체사진 fallback은 속도 때문에 앞 2단계까지만 봅니다.
+      const stageLimit=target.usedBroadRoi ? stages.length : 2;
+
+      for(let i=0;i<stageLimit;i++){
+        const stage=stages[i];
+
+        const result=orbLocateObjectAtScale(
+          referenceCanvas,
+          target.imageInfo.image,
+          stage.maxSide,
+          stage.mode,
+          stage.features,
+          stage.refMax
+        );
+
+        result.searchStage=i+1;
+        result.usedBroadRoi=target.usedBroadRoi;
+        result.broadSearchBox=target.broadSearchBox||null;
+
+        if(result.center){
+          result.center=[
+            target.imageInfo.offsetX+
+              result.center[0]/Math.max(.0001,target.imageInfo.sourceScale),
+            target.imageInfo.offsetY+
+              result.center[1]/Math.max(.0001,target.imageInfo.sourceScale)
+          ];
+        }
+
+        if(result.projectedStickerBox){
+          result.projectedStickerBox=mapSearchBoxToPhoto(
+            result.projectedStickerBox,
+            target.imageInfo,
+            photoImage
+          );
+        }
+
+        const rank=
+          (result.pass ? 100000 : 0)+
+          Number(result.inliers||0)*150+
+          Number(result.goodMatches||0)*10+
+          Number(result.geometryScore||0)*1200-
+          Math.min(999,Number(result.topMeanDistance||999))*2;
+
+        if(!best || rank>best.rank){
+          best={...result,rank};
+        }
+
+        if(result.pass){
+          return result;
+        }
+
+        if(performance.now()-started>8500){
+          if(best)best.analysisTimedOut=true;
+          break;
+        }
+
+        await new Promise(resolve=>setTimeout(resolve,0));
       }
 
-      // V37과 달리 이미 통과조건을 만족하면 즉시 종료합니다.
-      // presencePass 자체가 RANSAC + 투영형상 검증을 포함하므로 추가 반복이 불필요합니다.
-      if(result.pass){
-        return result;
-      }
-
-      // 한 장에서 장시간 분석이 이어지는 것을 차단합니다.
-      if(performance.now()-started>9000){
-        if(best)best.analysisTimedOut=true;
-        break;
-      }
-
-      // 다음 고비용 단계 전에 브라우저가 UI/네트워크를 처리할 시간을 줍니다.
-      await new Promise(resolve=>setTimeout(resolve,0));
+      if(performance.now()-started>8500)break;
     }
 
     if(best){
@@ -319,8 +377,151 @@
       preprocessMode:null,
       searchStage:null,
       analysisTimedOut:false,
-      searchMaxSide:null
+      searchMaxSide:null,
+      usedBroadRoi:false,
+      broadSearchBox:broadSearchBox||null
     };
+  }
+
+  function buildBroadStickerSearchBox(snapshot,example){
+    const p=snapshot?.plateSelection;
+
+    if(!validBox(p))return null;
+
+    const refPlate={
+      x:Number(example?.plate_x),
+      y:Number(example?.plate_y),
+      width:Number(example?.plate_width),
+      height:Number(example?.plate_height)
+    };
+
+    const refSticker={
+      x:Number(example?.crop_x),
+      y:Number(example?.crop_y),
+      width:Number(example?.crop_width),
+      height:Number(example?.crop_height)
+    };
+
+    if(!example?.plate_calibrated || !validBox(refPlate) || !validBox(refSticker)){
+      return broadFallbackFromPlate(p,snapshot?.sticker?.side_hint);
+    }
+
+    const pCx=Number(p.x)+Number(p.width)/2;
+    const pCy=Number(p.y)+Number(p.height)/2;
+    const rpCx=refPlate.x+refPlate.width/2;
+    const rpCy=refPlate.y+refPlate.height/2;
+    const rsCx=refSticker.x+refSticker.width/2;
+    const rsCy=refSticker.y+refSticker.height/2;
+
+    const sx=Number(p.width)/Math.max(.0001,refPlate.width);
+    const sy=Number(p.height)/Math.max(.0001,refPlate.height);
+
+    // 원근차이가 큰 측면사진에서 한 축의 배율이 튀는 것을 방지합니다.
+    const scale=clamp(Math.sqrt(Math.max(.02,sx*sy)),.35,3.5);
+
+    const predictedCx=pCx+(rsCx-rpCx)*scale;
+    const predictedCy=pCy+(rsCy-rpCy)*scale;
+    const predictedW=Math.max(.02,refSticker.width*scale);
+    const predictedH=Math.max(.015,refSticker.height*scale);
+
+    const rear=snapshot?.sticker?.side_hint==="rear";
+
+    // 절대 타이트하게 잡지 않습니다.
+    // 측면은 위치 편차가 크므로 화면의 절반 가까이를 탐색 대상으로 둡니다.
+    const width=clamp(
+      Math.max(predictedW*(rear?3.4:4.6),rear?.34:.48),
+      rear?.34:.48,
+      rear?.62:.78
+    );
+
+    const height=clamp(
+      Math.max(predictedH*(rear?3.6:5.0),rear?.30:.42),
+      rear?.30:.42,
+      rear?.58:.74
+    );
+
+    return clampBox({
+      x:predictedCx-width/2,
+      y:predictedCy-height/2,
+      width,
+      height
+    });
+  }
+
+  function broadFallbackFromPlate(plate,sideHint){
+    if(!validBox(plate))return null;
+
+    const cx=Number(plate.x)+Number(plate.width)/2;
+    const cy=Number(plate.y)+Number(plate.height)/2;
+    const rear=sideHint==="rear";
+
+    return clampBox({
+      x:cx-(rear?.42:.50),
+      y:cy-(rear?.28:.34),
+      width:rear?.72:.92,
+      height:rear?.56:.68
+    });
+  }
+
+  function buildSearchImage(photoImage,box,maxSide=2600){
+    const iw=Number(photoImage.naturalWidth||photoImage.width||0);
+    const ih=Number(photoImage.naturalHeight||photoImage.height||0);
+
+    if(!iw||!ih||!validBox(box)){
+      return{
+        image:photoImage,
+        offsetX:0,
+        offsetY:0,
+        sourceScale:1
+      };
+    }
+
+    const sx=Math.max(0,Math.round(Number(box.x)*iw));
+    const sy=Math.max(0,Math.round(Number(box.y)*ih));
+    const sw=Math.max(1,Math.round(Number(box.width)*iw));
+    const sh=Math.max(1,Math.round(Number(box.height)*ih));
+    const scale=Math.min(1,maxSide/Math.max(sw,sh));
+
+    const c=document.createElement("canvas");
+    c.width=Math.max(1,Math.round(sw*scale));
+    c.height=Math.max(1,Math.round(sh*scale));
+
+    c.getContext("2d").drawImage(
+      photoImage,
+      sx,sy,sw,sh,
+      0,0,c.width,c.height
+    );
+
+    return{
+      image:c,
+      offsetX:sx,
+      offsetY:sy,
+      sourceScale:scale
+    };
+  }
+
+  function mapSearchBoxToPhoto(box,imageInfo,photoImage){
+    if(!box)return null;
+
+    const fullW=Number(photoImage.naturalWidth||photoImage.width||1);
+    const fullH=Number(photoImage.naturalHeight||photoImage.height||1);
+    const img= imageInfo.image;
+    const localW=Number(img.naturalWidth||img.width||1);
+    const localH=Number(img.naturalHeight||img.height||1);
+
+    const localPx={
+      x:Number(box.x)*localW,
+      y:Number(box.y)*localH,
+      width:Number(box.width)*localW,
+      height:Number(box.height)*localH
+    };
+
+    return clampBox({
+      x:(imageInfo.offsetX+localPx.x/Math.max(.0001,imageInfo.sourceScale))/fullW,
+      y:(imageInfo.offsetY+localPx.y/Math.max(.0001,imageInfo.sourceScale))/fullH,
+      width:(localPx.width/Math.max(.0001,imageInfo.sourceScale))/fullW,
+      height:(localPx.height/Math.max(.0001,imageInfo.sourceScale))/fullH
+    });
   }
 
   function orbLocateObjectAtScale(referenceCanvas,photoImage,targetMaxSide,preprocessMode="raw",maxFeatures=4000,referenceMaxSide=700){
