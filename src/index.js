@@ -2617,6 +2617,11 @@ async function exportVehicleInspectionsCsv(env){
     "종합판정","운전석","조수석","후면","관리상태","관리자메모","접수일시"
   ];
 
+  const csvEscape=value=>{
+    const text=String(value??"");
+    return `"${text.replace(/"/g,'""')}"`;
+  };
+
   const csv=[
     header,
     ...(rows.results||[]).map(x=>[
@@ -2624,7 +2629,7 @@ async function exportVehicleInspectionsCsv(env){
       x.vehicle_type,x.overall_status,x.driver_status,x.passenger_status,
       x.rear_status,x.admin_state,x.admin_note,x.created_at
     ])
-  ].map(row=>row.map(csvCell).join(",")).join("\\r\\n");
+  ].map(row=>row.map(csvEscape).join(",")).join("\\r\\n");
 
   return new Response("\\ufeff"+csv,{
     headers:{
