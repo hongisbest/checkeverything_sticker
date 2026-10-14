@@ -241,6 +241,33 @@ async function api(request, env, url) {
   if (p === "/api/analysis-cache" && request.method === "GET") return getAnalysisCache(env, url);
   if (p === "/api/analysis-cache" && request.method === "POST") return saveAnalysisCache(request, env);
   if (p === "/api/inspection" && request.method === "POST") return saveInspection(request, env);
+
+  // V42.2: 통합점검은 한 번의 대용량 multipart 대신
+  // 접수 생성 -> 3면 순차 업로드 -> 최종확정으로 처리합니다.
+  if (p === "/api/vehicle-inspection/start" && request.method === "POST") {
+    return startVehicleInspection(request, env);
+  }
+
+  const vehicleSideUpload = p.match(/^\/api\/vehicle-inspection\/(\d+)\/upload\/(driver|passenger|rear)$/);
+  if (vehicleSideUpload && request.method === "POST") {
+    return uploadVehicleInspectionSide(
+      request, env,
+      Number(vehicleSideUpload[1]),
+      vehicleSideUpload[2]
+    );
+  }
+
+  const vehicleFinalize = p.match(/^\/api\/vehicle-inspection\/(\d+)\/finalize$/);
+  if (vehicleFinalize && request.method === "POST") {
+    return finalizeVehicleInspection(request, env, Number(vehicleFinalize[1]));
+  }
+
+  const vehicleAbort = p.match(/^\/api\/vehicle-inspection\/(\d+)\/abort$/);
+  if (vehicleAbort && request.method === "POST") {
+    return abortVehicleInspection(request, env, Number(vehicleAbort[1]));
+  }
+
+  // 구버전 클라이언트 호환용: 기존 3장 일괄 제출 API는 유지합니다.
   if (p === "/api/vehicle-inspection" && request.method === "POST") return saveVehicleInspection(request, env);
 
   const vehicleSideAnalysis = p.match(/^\/api\/vehicle-inspection\/(\d+)\/side\/(driver|passenger|rear)\/analysis$/);
@@ -1764,6 +1791,324 @@ function normalizeInspectionSideMeta(meta,side){
   };
 }
 
+
+async function startVehicleInspection(request,env){
+  if(!env.ADMIN_SESSION_SECRET){
+    return j({ok:false,error:"통합 점검용 Secret이 설정되지 않았습니다."},503);
+  }
+
+  const body=await request.json().catch(()=>({}));
+
+  const name=txt(body.employee_name,60);
+  const employeeId=txt(body.employee_id,40);
+  const department=txt(body.department,100);
+  const vehicle=txt(body.vehicle_no,40);
+  const vehicleType=String(body.vehicle_type||"").trim().toLowerCase();
+
+  if(!name||!employeeId||!department||!vehicle){
+    return j({ok:false,error:"성명, 사번, 부서, 차량번호를 모두 입력해 주세요."},400);
+  }
+
+  if(!["k3","avante","ev3"].includes(vehicleType)){
+    return j({ok:false,error:"차종을 다시 선택해 주세요."},400);
+  }
+
+  const registryMatch=await findVehicleRegistryMatch(env,{
+    employee_name:name,
+    employee_id:employeeId,
+    department,
+    vehicle_no:vehicle
+  });
+
+  if(!registryMatch){
+    return j({
+      ok:false,
+      error:"입력한 성명·사번·부서·차량번호가 관리자 등록 차량데이터와 일치하지 않습니다."
+    },409);
+  }
+
+  const receipt=await allocateVehicleInspectionReceipt(env);
+
+  const parent=await env.DB.prepare(`
+    INSERT INTO st_vehicle_inspections(
+      receipt_year,receipt_seq,receipt_no,
+      employee_name,employee_id,department,vehicle_no,vehicle_type,
+      overall_status,admin_state,admin_note
+    ) VALUES(?,?,?,?,?,?,?,?,?,'미확인','')
+    RETURNING id
+  `).bind(
+    receipt.year,
+    receipt.seq,
+    receipt.receipt_no,
+    name,
+    employeeId,
+    department,
+    vehicle,
+    vehicleType,
+    "분석대기"
+  ).first();
+
+  const inspectionId=Number(parent?.id||0);
+
+  if(!inspectionId){
+    return j({ok:false,error:"통합 점검 접수를 생성하지 못했습니다."},500);
+  }
+
+  const uploadToken=await sign(
+    `vehicle-upload:${inspectionId}:${receipt.receipt_no}`,
+    env.ADMIN_SESSION_SECRET
+  );
+
+  return j({
+    ok:true,
+    id:inspectionId,
+    receipt_no:receipt.receipt_no,
+    upload_token:uploadToken
+  });
+}
+
+async function vehicleUploadContext(request,env,inspectionId){
+  if(!env.ADMIN_SESSION_SECRET){
+    return{ok:false,response:j({ok:false,error:"통합 점검용 Secret이 설정되지 않았습니다."},503)};
+  }
+
+  const parent=await env.DB.prepare(`
+    SELECT id,receipt_no,vehicle_type
+    FROM st_vehicle_inspections
+    WHERE id=?
+  `).bind(inspectionId).first();
+
+  if(!parent){
+    return{ok:false,response:j({ok:false,error:"통합 점검 접수를 찾을 수 없습니다."},404)};
+  }
+
+  const token=String(request.headers.get("x-upload-token")||"");
+  const expected=await sign(
+    `vehicle-upload:${inspectionId}:${parent.receipt_no}`,
+    env.ADMIN_SESSION_SECRET
+  );
+
+  if(!token||!safeEqual(token,expected)){
+    return{ok:false,response:j({ok:false,error:"통합 점검 업로드 권한이 없습니다."},403)};
+  }
+
+  return{ok:true,parent};
+}
+
+async function uploadVehicleInspectionSide(request,env,inspectionId,side){
+  const ctx=await vehicleUploadContext(request,env,inspectionId);
+  if(!ctx.ok)return ctx.response;
+
+  const form=await request.formData();
+  const file=form.get("file");
+  const stickerId=Number(form.get("sticker_id"));
+
+  let plate;
+  try{
+    plate=JSON.parse(String(form.get("plate")||""));
+  }catch{
+    plate=null;
+  }
+
+  if(!file||typeof file==="string"){
+    return j({ok:false,error:"업로드할 사진이 없습니다."},400);
+  }
+
+  if(!String(file.type||"").startsWith("image/")){
+    return j({ok:false,error:"점검사진은 이미지 파일만 가능합니다."},400);
+  }
+
+  if(Number(file.size||0)>8*1024*1024){
+    return j({ok:false,error:"점검사진은 장당 8MB 이하로 제출해 주세요."},400);
+  }
+
+  const vals=[
+    Number(plate?.x),
+    Number(plate?.y),
+    Number(plate?.width),
+    Number(plate?.height)
+  ];
+
+  if(
+    !vals.every(Number.isFinite) ||
+    vals[0]<0 || vals[1]<0 ||
+    vals[2]<=.01 || vals[3]<=.01 ||
+    vals[0]+vals[2]>1.0001 ||
+    vals[1]+vals[3]>1.0001
+  ){
+    return j({ok:false,error:"번호판 영역이 올바르지 않습니다."},400);
+  }
+
+  const sticker=await env.DB.prepare(`
+    SELECT id,side_hint
+    FROM st_stickers
+    WHERE id=? AND is_active=1
+  `).bind(stickerId).first();
+
+  if(!sticker){
+    return j({ok:false,error:"기준 스티커를 찾을 수 없습니다."},400);
+  }
+
+  if(String(sticker.side_hint||"")!==side){
+    return j({ok:false,error:"촬영면과 기준 스티커 설정이 일치하지 않습니다."},400);
+  }
+
+  const key=`sticker-compare/inspection/${ctx.parent.receipt_no}-${side}.jpg`;
+
+  await env.STORAGE.put(key,file.stream(),{
+    httpMetadata:{
+      contentType:file.type||"image/jpeg",
+      cacheControl:"private,max-age=0"
+    }
+  });
+
+  try{
+    await env.DB.prepare(`
+      INSERT INTO st_vehicle_inspection_sides(
+        inspection_id,side,sticker_id,photo_object_key,
+        plate_x,plate_y,plate_width,plate_height,
+        score,status,findings_json,metrics_json
+      ) VALUES(?,?,?,?,?,?,?,?,0,'분석대기',?,?)
+      ON CONFLICT(inspection_id,side) DO UPDATE SET
+        sticker_id=excluded.sticker_id,
+        photo_object_key=excluded.photo_object_key,
+        plate_x=excluded.plate_x,
+        plate_y=excluded.plate_y,
+        plate_width=excluded.plate_width,
+        plate_height=excluded.plate_height,
+        score=0,
+        status='분석대기',
+        findings_json=excluded.findings_json,
+        metrics_json=excluded.metrics_json,
+        updated_at=datetime('now')
+    `).bind(
+      inspectionId,
+      side,
+      stickerId,
+      key,
+      vals[0],vals[1],vals[2],vals[3],
+      JSON.stringify(["사진 저장 완료 · 관리자용 자동분석 대기"]),
+      JSON.stringify({
+        userAnalysisHidden:true,
+        analysisPending:true,
+        vehicleType:String(ctx.parent.vehicle_type||""),
+        sideHint:side,
+        plateConfirmed:true,
+        plateCrop:{
+          x:vals[0],y:vals[1],width:vals[2],height:vals[3]
+        }
+      })
+    ).run();
+  }catch(error){
+    // DB 반영 실패 시 방금 저장한 R2 파일을 가능한 범위에서 정리합니다.
+    try{await env.STORAGE.delete(key)}catch{}
+    throw error;
+  }
+
+  return j({
+    ok:true,
+    id:inspectionId,
+    side,
+    uploaded:true
+  });
+}
+
+async function finalizeVehicleInspection(request,env,inspectionId){
+  const ctx=await vehicleUploadContext(request,env,inspectionId);
+  if(!ctx.ok)return ctx.response;
+
+  const rows=await env.DB.prepare(`
+    SELECT side,photo_object_key
+    FROM st_vehicle_inspection_sides
+    WHERE inspection_id=?
+    ORDER BY side
+  `).bind(inspectionId).all();
+
+  const items=rows.results||[];
+  const bySide=new Map(items.map(x=>[String(x.side),x]));
+
+  for(const side of ["driver","passenger","rear"]){
+    if(!bySide.has(side)){
+      return j({
+        ok:false,
+        error:`${side==="driver"?"운전석":side==="passenger"?"조수석":"후면"} 사진 저장이 완료되지 않았습니다.`
+      },409);
+    }
+
+    const row=bySide.get(side);
+    const object=await env.STORAGE.head(row.photo_object_key);
+
+    if(!object){
+      return j({
+        ok:false,
+        error:`${side==="driver"?"운전석":side==="passenger"?"조수석":"후면"} 사진 파일을 확인하지 못했습니다.`
+      },409);
+    }
+  }
+
+  await env.DB.prepare(`
+    UPDATE st_vehicle_inspections
+    SET overall_status='분석대기',updated_at=datetime('now')
+    WHERE id=?
+  `).bind(inspectionId).run();
+
+  const sides={};
+
+  for(const side of ["driver","passenger","rear"]){
+    const row=bySide.get(side);
+    const analysisToken=await sign(
+      `vehicle-analysis:${inspectionId}:${side}:${row.photo_object_key}`,
+      env.ADMIN_SESSION_SECRET
+    );
+
+    sides[side]={analysis_token:analysisToken};
+  }
+
+  return j({
+    ok:true,
+    id:inspectionId,
+    receipt_no:ctx.parent.receipt_no,
+    sides
+  });
+}
+
+async function abortVehicleInspection(request,env,inspectionId){
+  const ctx=await vehicleUploadContext(request,env,inspectionId);
+  if(!ctx.ok)return ctx.response;
+
+  const rows=await env.DB.prepare(`
+    SELECT photo_object_key
+    FROM st_vehicle_inspection_sides
+    WHERE inspection_id=?
+  `).bind(inspectionId).all();
+
+  const keys=(rows.results||[])
+    .map(x=>String(x.photo_object_key||""))
+    .filter(Boolean);
+
+  await env.DB.batch([
+    env.DB.prepare(
+      "DELETE FROM st_vehicle_inspection_sides WHERE inspection_id=?"
+    ).bind(inspectionId),
+    env.DB.prepare(
+      "DELETE FROM st_vehicle_inspections WHERE id=?"
+    ).bind(inspectionId)
+  ]);
+
+  let imageDeleteFailed=0;
+
+  for(const key of keys){
+    try{await env.STORAGE.delete(key)}catch{imageDeleteFailed++}
+  }
+
+  return j({
+    ok:true,
+    aborted:true,
+    image_delete_failed:imageDeleteFailed
+  });
+}
+
+
 async function saveVehicleInspection(request,env){
   const form=await request.formData();
 
@@ -1965,13 +2310,16 @@ async function recomputeVehicleInspectionStatus(env,inspectionId){
 
   let overall="분석대기";
 
-  if(statuses.includes("확인필요")){
+  // 차량 1건의 종합판정은 3개 촬영면 분석이 모두 끝난 뒤 확정합니다.
+  if(statuses.length<3 || statuses.includes("분석대기")){
+    overall="분석대기";
+  }else if(statuses.includes("확인필요")){
     overall="확인필요";
   }else if(statuses.includes("판정불가")){
     overall="판정불가";
-  }else if(statuses.length===3 && statuses.every(x=>x==="정상")){
+  }else if(statuses.every(x=>x==="정상")){
     overall="정상";
-  }else if(statuses.length===3 && !statuses.includes("분석대기")){
+  }else{
     overall="판정불가";
   }
 
