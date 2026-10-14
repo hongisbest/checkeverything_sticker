@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const FINAL_ENGINE="final-presence-v3-presence-first";
+  const FINAL_ENGINE="final-presence-v4-field-calibrated";
   const PLATE_HANGUL=
     "가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주아바사자배하허호";
 
@@ -112,6 +112,8 @@
         presencePhotoKeypoints:presence.photoKeypoints,
         presenceSearchMaxSide:presence.searchMaxSide||null,
         presenceGeometryValid:presence.geometryValid===true,
+        presenceGeometryScore:round1((presence.geometryScore||0)*100),
+        presencePreprocessMode:presence.preprocessMode||null,
         detectedStickerBox:presence.projectedStickerBox||null,
         presenceReferenceAttempts:candidateExamples.length,
         detectedStickerCenter:presence.center||null,
@@ -135,7 +137,7 @@
             status:"확인필요",
             recommendation:"미부착 여부 확인",
             findings:[
-              "스티커 미검출 → 동일 차종 정상예시들을 여러 크기로 비교했으나 충분한 특징점 정합이 확인되지 않았습니다."
+              "스티커 미검출 → 동일 차종 정상예시를 거리·조명 조건별로 분석했으나 스티커 존재를 안정적으로 확인하지 못했습니다."
             ],
             metrics
           }
@@ -150,7 +152,7 @@
             status:"정상",
             recommendation:"",
             findings:[
-              "스티커 검출 → 동일 차종 정상예시 중 하나와 안정적인 특징점 정합이 확인되었습니다."
+              "스티커 검출 → 다중 스케일·조명 보정 분석에서 스티커 존재가 확인되었습니다."
             ],
             metrics:{
               ...metrics,
@@ -227,31 +229,35 @@
   };
 
   function orbLocateObject(referenceCanvas,photoImage){
-    // 멀리서 촬영된 차량에서 스티커가 작게 보이는 경우를 위해
-    // 동일 사진을 여러 해상도로 탐색합니다. 첫 단계가 통과하면 즉시 종료해
-    // 일반적인 사진의 처리시간 증가는 최소화합니다.
+    // 현장사진 기준: 거리 차이는 다중 스케일, 조명 차이는 raw/CLAHE 두 경로로 보정합니다.
     const searchSizes=[1400,1920,2400];
+    const preprocessModes=["raw","clahe"];
     let best=null;
 
     for(const maxSide of searchSizes){
-      const result=orbLocateObjectAtScale(
-        referenceCanvas,
-        photoImage,
-        maxSide
-      );
+      for(const mode of preprocessModes){
+        const result=orbLocateObjectAtScale(
+          referenceCanvas,
+          photoImage,
+          maxSide,
+          mode
+        );
 
-      const rank=
-        (result.pass ? 100000 : 0)+
-        Number(result.inliers||0)*120+
-        Number(result.goodMatches||0)*8-
-        Math.min(999,Number(result.topMeanDistance||999))*2;
+        const rank=
+          (result.pass ? 100000 : 0)+
+          Number(result.inliers||0)*150+
+          Number(result.goodMatches||0)*10+
+          Number(result.geometryScore||0)*1200-
+          Math.min(999,Number(result.topMeanDistance||999))*2;
 
-      if(!best || rank>best.rank){
-        best={...result,rank};
-      }
+        if(!best || rank>best.rank){
+          best={...result,rank};
+        }
 
-      if(result.pass){
-        return result;
+        // 강한 검출은 즉시 종료합니다.
+        if(result.pass && result.inliers>=8 && result.geometryScore>=.55){
+          return result;
+        }
       }
     }
 
@@ -270,11 +276,14 @@
       photoKeypoints:0,
       confidence:0,
       center:null,
+      geometryValid:false,
+      geometryScore:0,
+      preprocessMode:null,
       searchMaxSide:null
     };
   }
 
-  function orbLocateObjectAtScale(referenceCanvas,photoImage,targetMaxSide){
+  function orbLocateObjectAtScale(referenceCanvas,photoImage,targetMaxSide,preprocessMode="raw"){
     const photo=fitImageToTargetMaxSide(photoImage,targetMaxSide);
     const ref=fitCanvasMaxSide(referenceCanvas,900);
 
@@ -292,6 +301,11 @@
       cv.cvtColor(src,g1,cv.COLOR_RGBA2GRAY);
       cv.cvtColor(dst,g2,cv.COLOR_RGBA2GRAY);
 
+      if(preprocessMode==="clahe"){
+        applyClaheInPlace(g1);
+        applyClaheInPlace(g2);
+      }
+
       mask1=new cv.Mat();
       mask2=new cv.Mat();
       kp1=new cv.KeyPointVector();
@@ -300,7 +314,7 @@
       des2=new cv.Mat();
 
       // 존재 여부가 핵심이므로 작은 글자형 스티커에서도 특징점을 최대한 확보합니다.
-      orb=new cv.ORB(7000);
+      orb=new cv.ORB(8000);
       orb.detectAndCompute(g1,mask1,kp1,des1);
       orb.detectAndCompute(g2,mask2,kp2,des2);
 
@@ -309,7 +323,7 @@
 
       // BGF리테일처럼 단색 글자형 스티커는 기준영역 자체의 특징점이 적을 수 있습니다.
       if(
-        referenceKeypoints<8 ||
+        referenceKeypoints<6 ||
         photoKeypoints<30 ||
         des1.empty() ||
         des2.empty()
@@ -325,6 +339,8 @@
           confidence:0,
           center:null,
           geometryValid:false,
+          geometryScore:0,
+          preprocessMode,
           searchMaxSide:targetMaxSide
         };
       }
@@ -352,7 +368,7 @@
 
         // 디자인 정밀도보다 실제 존재를 우선하므로 후보 폭을 넓히고
         // 아래 RANSAC + 투영형상 검증으로 오탐을 다시 걸러냅니다.
-        if(d<72)good.push(item);
+        if(d<78)good.push(item);
       }
 
       all.sort((a,b)=>a.distance-b.distance);
@@ -374,6 +390,8 @@
           confidence:0,
           center:null,
           geometryValid:false,
+          geometryScore:0,
+          preprocessMode,
           searchMaxSide:targetMaxSide
         };
       }
@@ -448,40 +466,44 @@
               ]
             : null);
 
-      // 기존의 매우 강한 일치조건은 그대로 유지합니다.
+      const geometryScore=Number(projected?.geometryScore||0);
+
+      // 매우 강한 특징점 일치는 그대로 정상 인정합니다.
       const strictPass=
         inliers>=8 &&
-        topMeanDistance<=39.0 &&
+        topMeanDistance<=42.0 &&
         Boolean(center);
 
-      // 원근/거리 변화가 있는 정상 스티커용.
+      // 원근/촬영거리 변화가 있는 사진.
       const perspectivePass=
-        inliers>=9 &&
-        good.length>=10 &&
-        inlierRatio>=.24 &&
-        topMeanDistance<=50.0 &&
+        inliers>=7 &&
+        good.length>=8 &&
+        inlierRatio>=.16 &&
+        topMeanDistance<=58.0 &&
         geometryValid &&
+        geometryScore>=.38 &&
         Boolean(center);
 
-      // 최종 목적은 "스티커가 붙어 있는가" 확인입니다.
-      // 디자인 유사도 자체를 정상/확인필요의 핵심 기준으로 쓰지 않고,
-      // 서로 다른 특징점들이 하나의 실제 스티커 평면으로 일관되게 모이는 경우
-      // 존재로 인정합니다.
+      // 현장 보정 핵심:
+      // 디자인의 세부 일치보다 "동일한 평면 객체가 실제 위치에 존재하는가"를 우선합니다.
+      // 특징점 수가 적은 BGF리테일 글자형 스티커도, RANSAC 투영형상이 안정적이면 존재로 인정합니다.
       const presencePass=
-        inliers>=6 &&
-        good.length>=7 &&
-        inlierRatio>=.18 &&
-        topMeanDistance<=60.0 &&
+        inliers>=5 &&
+        good.length>=6 &&
+        inlierRatio>=.10 &&
+        topMeanDistance<=70.0 &&
         geometryValid &&
+        geometryScore>=.52 &&
         Boolean(center);
 
       const pass=strictPass||perspectivePass||presencePass;
 
       const confidence=pass
         ? clamp(
-            (Math.min(20,inliers)/20)*50+
-            clamp(inlierRatio/.45,0,1)*30+
-            clamp((65-topMeanDistance)/30,0,1)*20,
+            (Math.min(16,inliers)/16)*42+
+            clamp(inlierRatio/.35,0,1)*20+
+            clamp(geometryScore/.85,0,1)*28+
+            clamp((74-topMeanDistance)/34,0,1)*10,
             0,100
           )
         : 0;
@@ -497,7 +519,9 @@
         confidence,
         center,
         geometryValid,
+        geometryScore,
         projectedStickerBox:projected?.box||null,
+        preprocessMode,
         searchMaxSide:targetMaxSide
       };
 
@@ -543,30 +567,75 @@
     const w=maxX-minX;
     const h=maxY-minY;
 
-    if(w<12||h<8)return null;
+    if(w<10||h<6)return null;
 
-    // 스티커는 사진 전체보다 훨씬 작은 객체여야 하며 지나치게 세로로 찌그러진
-    // 허위 homography는 존재검출로 인정하지 않습니다.
     const bboxArea=(w*h)/Math.max(1,photoW*photoH);
     const ratio=w/Math.max(1,h);
 
-    const marginX=photoW*.12;
-    const marginY=photoH*.12;
+    const polygonArea=Math.abs(
+      pts.reduce((sum,p,i)=>{
+        const q=pts[(i+1)%pts.length];
+        return sum + p[0]*q[1]-q[0]*p[1];
+      },0)
+    )/2;
+
+    const polygonFill=polygonArea/Math.max(1,w*h);
+
+    const cross=[];
+    for(let i=0;i<4;i++){
+      const a=pts[i];
+      const b=pts[(i+1)%4];
+      const c=pts[(i+2)%4];
+      cross.push(
+        (b[0]-a[0])*(c[1]-b[1])-
+        (b[1]-a[1])*(c[0]-b[0])
+      );
+    }
+
+    const sameSign=
+      cross.every(v=>v>0) ||
+      cross.every(v=>v<0);
+
+    const marginX=photoW*.15;
+    const marginY=photoH*.15;
     const mostlyInside=
       minX>=-marginX &&
       minY>=-marginY &&
       maxX<=photoW+marginX &&
       maxY<=photoH+marginY;
 
+    const areaScore=
+      bboxArea>=.00005 && bboxArea<=.20
+        ? 1
+        : (bboxArea>=.00002 && bboxArea<=.28 ? .45 : 0);
+
+    const ratioScore=
+      ratio>=.35 && ratio<=10
+        ? 1
+        : (ratio>=.22 && ratio<=14 ? .45 : 0);
+
+    const fillScore=clamp((polygonFill-.18)/.42,0,1);
+    const convexScore=sameSign?1:0;
+    const insideScore=mostlyInside?1:0;
+
+    const geometryScore=
+      areaScore*.20+
+      ratioScore*.18+
+      fillScore*.27+
+      convexScore*.20+
+      insideScore*.15;
+
     const valid=
       mostlyInside &&
-      bboxArea>=.00008 &&
-      bboxArea<=.18 &&
-      ratio>=.45 &&
-      ratio<=9.0;
+      sameSign &&
+      areaScore>0 &&
+      ratioScore>0 &&
+      polygonFill>=.16 &&
+      geometryScore>=.34;
 
     return{
       valid,
+      geometryScore,
       center:[
         ((minX+maxX)/2)/Math.max(.0001,photoScale),
         ((minY+maxY)/2)/Math.max(.0001,photoScale)
@@ -578,8 +647,24 @@
         height:h/Math.max(1,photoH)
       },
       bboxArea,
-      ratio
+      ratio,
+      polygonFill
     };
+  }
+
+  function applyClaheInPlace(gray){
+    let clahe=null;
+    let dst=null;
+
+    try{
+      clahe=new cv.CLAHE(2.0,new cv.Size(8,8));
+      dst=new cv.Mat();
+      clahe.apply(gray,dst);
+      dst.copyTo(gray);
+    }finally{
+      try{dst?.delete?.();}catch{}
+      try{clahe?.delete?.();}catch{}
+    }
   }
 
   function fitImageToTargetMaxSide(image,targetMaxSide){
