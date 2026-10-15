@@ -54,6 +54,7 @@
 
     const values={
       q:el("vehicleDataSearch")?.value.trim(),
+      submitted:el("filterVehicleSubmitted")?.value.trim(),
       employee_name:el("filterVehicleName")?.value.trim(),
       employee_id:el("filterVehicleEmployeeId")?.value.trim(),
       department:el("filterVehicleDepartment")?.value.trim(),
@@ -69,7 +70,7 @@
 
   async function loadVehicleData(){
     const body=el("vehicleDataTableBody");
-    if(body)body.innerHTML='<tr><td colspan="5">불러오는 중...</td></tr>';
+    if(body)body.innerHTML='<tr><td colspan="6">불러오는 중...</td></tr>';
 
     try{
       const r=await fetch(`/api/admin/vehicle-data?${query()}`,{cache:"no-store"});
@@ -88,7 +89,7 @@
 
       renderRows();
     }catch(error){
-      if(body)body.innerHTML=`<tr><td colspan="5">${escapeHtml(error.message)}</td></tr>`;
+      if(body)body.innerHTML=`<tr><td colspan="6">${escapeHtml(error.message)}</td></tr>`;
     }
   }
 
@@ -97,12 +98,13 @@
     if(!body)return;
 
     if(!state.rows.length){
-      body.innerHTML='<tr><td colspan="5">조건에 맞는 차량데이터가 없습니다.</td></tr>';
+      body.innerHTML='<tr><td colspan="6">조건에 맞는 차량데이터가 없습니다.</td></tr>';
       return;
     }
 
     body.innerHTML=state.rows.map(row=>`
       <tr data-id="${Number(row.id)}">
+        <td><span class="pill ${Number(row.submitted)===1?"normal":"pending"}">${Number(row.submitted)===1?"제출":"미제출"}</span></td>
         <td><input data-field="employee_name" value="${escapeHtml(row.employee_name)}"></td>
         <td><input data-field="employee_id" value="${escapeHtml(row.employee_id)}"></td>
         <td><input data-field="department" value="${escapeHtml(row.department)}"></td>
@@ -417,6 +419,7 @@
       if(!r.ok)throw new Error(d.error||"다운로드 데이터 조회 실패");
 
       const rows=(d.items||[]).map(x=>({
+        "제출여부":Number(x.submitted)===1?"제출":"미제출",
         "성명":x.employee_name,
         "사번":x.employee_id,
         "부서":x.department,
@@ -424,7 +427,7 @@
       }));
 
       const ws=XLSX.utils.json_to_sheet(rows,{
-        header:["성명","사번","부서","차량번호"]
+        header:["제출여부","성명","사번","부서","차량번호"]
       });
 
       const wb=XLSX.utils.book_new();
@@ -458,6 +461,7 @@
   function resetFilters(){
     [
       "vehicleDataSearch",
+      "filterVehicleSubmitted",
       "filterVehicleName",
       "filterVehicleEmployeeId",
       "filterVehicleDepartment",
@@ -498,6 +502,11 @@
         state.page=1;
         loadVehicleData();
       }
+    });
+
+    el("filterVehicleSubmitted").addEventListener("change",()=>{
+      state.page=1;
+      loadVehicleData();
     });
 
     [

@@ -542,14 +542,14 @@ async function listVehicleRegistry(env,url){
   const pageSize=15;
 
   const sortMap={
-    employee_name:"employee_name",
-    employee_id:"employee_id",
-    department:"department",
-    vehicle_no:"vehicle_no",
-    updated_at:"updated_at"
+    employee_name:"r.employee_name",
+    employee_id:"r.employee_id",
+    department:"r.department",
+    vehicle_no:"r.vehicle_no",
+    updated_at:"r.updated_at"
   };
 
-  const sort=sortMap[url.searchParams.get("sort")]||"employee_name";
+  const sort=sortMap[url.searchParams.get("sort")]||"r.employee_name";
   const dir=String(url.searchParams.get("dir")||"asc").toLowerCase()==="desc"
     ? "DESC"
     : "ASC";
@@ -559,6 +559,7 @@ async function listVehicleRegistry(env,url){
   const employeeId=registryText(url.searchParams.get("employee_id"),40);
   const department=registryText(url.searchParams.get("department"),100);
   const vehicleNo=registryText(url.searchParams.get("vehicle_no"),40);
+  const submitted=String(url.searchParams.get("submitted")||"").toLowerCase();
 
   const where=[];
   const values=[];
@@ -566,39 +567,51 @@ async function listVehicleRegistry(env,url){
   if(q){
     const like=`%${q}%`;
     where.push(`(
-      employee_name LIKE ? OR
-      employee_id LIKE ? OR
-      department LIKE ? OR
-      vehicle_no LIKE ?
+      r.employee_name LIKE ? OR
+      r.employee_id LIKE ? OR
+      r.department LIKE ? OR
+      r.vehicle_no LIKE ?
     )`);
     values.push(like,like,like,like);
   }
 
   if(employeeName){
-    where.push("employee_name LIKE ?");
+    where.push("r.employee_name LIKE ?");
     values.push(`%${employeeName}%`);
   }
 
   if(employeeId){
-    where.push("employee_id LIKE ?");
+    where.push("r.employee_id LIKE ?");
     values.push(`%${employeeId}%`);
   }
 
   if(department){
-    where.push("department LIKE ?");
+    where.push("r.department LIKE ?");
     values.push(`%${department}%`);
   }
 
   if(vehicleNo){
-    where.push("vehicle_no LIKE ?");
+    where.push("r.vehicle_no LIKE ?");
     values.push(`%${vehicleNo}%`);
+  }
+
+  const submissionExists=`EXISTS (
+    SELECT 1
+    FROM st_vehicle_inspections vi
+    WHERE REPLACE(REPLACE(UPPER(TRIM(COALESCE(vi.vehicle_no,''))),' ',''),'-','')=r.vehicle_no_key
+  )`;
+
+  if(submitted==="yes"){
+    where.push(submissionExists);
+  }else if(submitted==="no"){
+    where.push(`NOT ${submissionExists}`);
   }
 
   const clause=where.length ? `WHERE ${where.join(" AND ")}` : "";
 
   const totalRow=await env.DB.prepare(`
     SELECT COUNT(*) AS c
-    FROM st_vehicle_registry
+    FROM st_vehicle_registry r
     ${clause}
   `).bind(...values).first();
 
@@ -608,10 +621,12 @@ async function listVehicleRegistry(env,url){
   const offset=(safePage-1)*pageSize;
 
   const rows=await env.DB.prepare(`
-    SELECT id,employee_name,employee_id,department,vehicle_no,created_at,updated_at
-    FROM st_vehicle_registry
+    SELECT
+      r.id,r.employee_name,r.employee_id,r.department,r.vehicle_no,r.created_at,r.updated_at,
+      CASE WHEN ${submissionExists} THEN 1 ELSE 0 END AS submitted
+    FROM st_vehicle_registry r
     ${clause}
-    ORDER BY ${sort} ${dir}, id ASC
+    ORDER BY ${sort} ${dir}, r.id ASC
     LIMIT ? OFFSET ?
   `).bind(...values,pageSize,offset).all();
 
@@ -622,7 +637,7 @@ async function listVehicleRegistry(env,url){
     page_size:pageSize,
     total,
     total_pages:totalPages,
-    sort,
+    sort:String(url.searchParams.get("sort")||"employee_name"),
     dir:dir.toLowerCase()
   });
 }
@@ -719,9 +734,15 @@ async function importVehicleRegistry(request,env){
 
 async function exportVehicleRegistry(env){
   const rows=await env.DB.prepare(`
-    SELECT employee_name,employee_id,department,vehicle_no
-    FROM st_vehicle_registry
-    ORDER BY department COLLATE NOCASE ASC, employee_name COLLATE NOCASE ASC, id ASC
+    SELECT
+      r.employee_name,r.employee_id,r.department,r.vehicle_no,
+      CASE WHEN EXISTS (
+        SELECT 1
+        FROM st_vehicle_inspections vi
+        WHERE REPLACE(REPLACE(UPPER(TRIM(COALESCE(vi.vehicle_no,''))),' ',''),'-','')=r.vehicle_no_key
+      ) THEN 1 ELSE 0 END AS submitted
+    FROM st_vehicle_registry r
+    ORDER BY r.department COLLATE NOCASE ASC, r.employee_name COLLATE NOCASE ASC, r.id ASC
   `).all();
 
   return j({ok:true,items:rows.results||[]});

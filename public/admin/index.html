@@ -288,9 +288,10 @@
   </div>
 
   <div style="overflow-x:auto;margin-top:12px">
-    <table style="width:100%;border-collapse:collapse;min-width:880px">
+    <table style="width:100%;border-collapse:collapse;min-width:980px">
       <thead>
         <tr>
+          <th>제출여부</th>
           <th><button class="btn small vehicle-sort-btn" data-sort="employee_name" type="button">성명 ↕</button></th>
           <th><button class="btn small vehicle-sort-btn" data-sort="employee_id" type="button">사번 ↕</button></th>
           <th><button class="btn small vehicle-sort-btn" data-sort="department" type="button">부서 ↕</button></th>
@@ -298,6 +299,13 @@
           <th>관리</th>
         </tr>
         <tr>
+          <th>
+            <select id="filterVehicleSubmitted" aria-label="제출여부 필터">
+              <option value="">전체</option>
+              <option value="yes">제출</option>
+              <option value="no">미제출</option>
+            </select>
+          </th>
           <th><input id="filterVehicleName" type="text" placeholder="성명 필터"></th>
           <th><input id="filterVehicleEmployeeId" type="text" placeholder="사번 필터"></th>
           <th><input id="filterVehicleDepartment" type="text" placeholder="부서 필터"></th>
@@ -306,7 +314,7 @@
         </tr>
       </thead>
       <tbody id="vehicleDataTableBody">
-        <tr><td colspan="5">불러오는 중...</td></tr>
+        <tr><td colspan="6">불러오는 중...</td></tr>
       </tbody>
     </table>
   </div>
@@ -522,7 +530,7 @@
 </main>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="/js/admin.js?v=20.0.0"></script>
-<script src="/js/admin-vehicle-data-v31.js?v=31.0.0"></script>
+<script src="/js/admin-vehicle-data-v31.js?v=31.4.0"></script>
 <script src="/js/admin-group-v42.js?v=42.6.0"></script>
 </body>
 </html>
