@@ -1,0 +1,107 @@
+/* V43.3 관리자 차량데이터 표 가독성 최적화 */
+#vehiclesView .vehicle-data-table{
+  width:100%;
+  min-width:1040px;
+  border-collapse:separate;
+  border-spacing:0 6px;
+  table-layout:fixed;
+}
+#vehiclesView .vehicle-data-table th{
+  padding:4px 6px;
+  text-align:left;
+  vertical-align:middle;
+  white-space:nowrap;
+}
+#vehiclesView .vehicle-data-table td{
+  padding:3px 6px;
+  vertical-align:middle;
+}
+#vehiclesView .vehicle-data-table tbody tr{background:#fff}
+#vehiclesView .vehicle-data-table tbody td{
+  border-top:1px solid #e5eaf0;
+  border-bottom:1px solid #e5eaf0;
+}
+#vehiclesView .vehicle-data-table tbody td:first-child{
+  border-left:1px solid #e5eaf0;
+  border-radius:10px 0 0 10px;
+}
+#vehiclesView .vehicle-data-table tbody td:last-child{
+  border-right:1px solid #e5eaf0;
+  border-radius:0 10px 10px 0;
+}
+#vehiclesView .vehicle-col-submit{width:92px}
+#vehiclesView .vehicle-col-name{width:22%}
+#vehiclesView .vehicle-col-id{width:17%}
+#vehiclesView .vehicle-col-department{width:20%}
+#vehiclesView .vehicle-col-number{width:22%}
+#vehiclesView .vehicle-col-actions{width:132px}
+
+#vehiclesView .vehicle-submit-head,
+#vehiclesView .vehicle-submit-filter,
+#vehiclesView .vehicle-submit-cell{text-align:center}
+
+#vehiclesView .vehicle-submit-status{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  min-width:68px;
+  height:30px;
+  padding:0 9px;
+  border-radius:999px;
+  white-space:nowrap;
+  word-break:keep-all;
+  font-size:12px;
+  font-weight:800;
+  line-height:1;
+}
+#vehiclesView .vehicle-submit-status.submitted{
+  color:#137a45;
+  background:#eef9f3;
+  border:1px solid #ccebd9;
+}
+#vehiclesView .vehicle-submit-status.not-submitted{
+  color:#b93b3b;
+  background:#fff3f3;
+  border:1px solid #f3d2d2;
+}
+#vehiclesView .vehicle-submit-dot{
+  width:8px;
+  height:8px;
+  flex:0 0 8px;
+  border-radius:50%;
+  background:currentColor;
+}
+#vehiclesView .vehicle-data-table input,
+#vehiclesView .vehicle-data-table select{
+  width:100%;
+  min-width:0;
+  height:36px;
+  box-sizing:border-box;
+  border-radius:8px;
+}
+#vehiclesView .vehicle-data-table .vehicle-sort-btn{
+  width:100%;
+  min-height:36px;
+  justify-content:flex-start;
+  white-space:nowrap;
+}
+#vehiclesView .vehicle-submit-filter select{
+  min-width:72px;
+  text-align:center;
+  text-align-last:center;
+}
+#vehiclesView .vehicle-data-table td:last-child{white-space:nowrap}
+#vehiclesView .vehicle-data-table td:last-child .btn{
+  min-width:54px;
+  padding-left:10px;
+  padding-right:10px;
+}
+@media(max-width:1100px){
+  #vehiclesView .vehicle-data-table{min-width:960px}
+  #vehiclesView .vehicle-col-submit{width:84px}
+  #vehiclesView .vehicle-col-actions{width:124px}
+}
+@media(max-width:760px){
+  #vehiclesView .vehicle-data-table{min-width:920px}
+}

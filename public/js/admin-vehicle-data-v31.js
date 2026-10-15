@@ -104,7 +104,16 @@
 
     body.innerHTML=state.rows.map(row=>`
       <tr data-id="${Number(row.id)}">
-        <td><span class="pill ${Number(row.submitted)===1?"normal":"pending"}">${Number(row.submitted)===1?"제출":"미제출"}</span></td>
+        <td class="vehicle-submit-cell">
+          <span
+            class="vehicle-submit-status ${Number(row.submitted)===1?"submitted":"not-submitted"}"
+            title="${Number(row.submitted)===1?"제출 완료":"미제출"}"
+            aria-label="${Number(row.submitted)===1?"제출 완료":"미제출"}"
+          >
+            <span class="vehicle-submit-dot" aria-hidden="true"></span>
+            <span>${Number(row.submitted)===1?"제출":"미제출"}</span>
+          </span>
+        </td>
         <td><input data-field="employee_name" value="${escapeHtml(row.employee_name)}"></td>
         <td><input data-field="employee_id" value="${escapeHtml(row.employee_id)}"></td>
         <td><input data-field="department" value="${escapeHtml(row.department)}"></td>

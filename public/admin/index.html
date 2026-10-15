@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/css/app.css">
 <link rel="stylesheet" href="/css/pc-layout-fix-v31.css?v=31.0.0">
 <link rel="stylesheet" href="/css/group-inspection-v42.css?v=42.0.0">
+<link rel="stylesheet" href="/css/admin-vehicle-data-v43.css?v=43.3.0">
 </head>
 <body>
 <main class="container">
@@ -288,10 +289,18 @@
   </div>
 
   <div style="overflow-x:auto;margin-top:12px">
-    <table style="width:100%;border-collapse:collapse;min-width:980px">
+    <table class="vehicle-data-table">
+      <colgroup>
+        <col class="vehicle-col-submit">
+        <col class="vehicle-col-name">
+        <col class="vehicle-col-id">
+        <col class="vehicle-col-department">
+        <col class="vehicle-col-number">
+        <col class="vehicle-col-actions">
+      </colgroup>
       <thead>
         <tr>
-          <th>제출여부</th>
+          <th class="vehicle-submit-head">제출여부</th>
           <th><button class="btn small vehicle-sort-btn" data-sort="employee_name" type="button">성명 ↕</button></th>
           <th><button class="btn small vehicle-sort-btn" data-sort="employee_id" type="button">사번 ↕</button></th>
           <th><button class="btn small vehicle-sort-btn" data-sort="department" type="button">부서 ↕</button></th>
@@ -299,7 +308,7 @@
           <th>관리</th>
         </tr>
         <tr>
-          <th>
+          <th class="vehicle-submit-filter">
             <select id="filterVehicleSubmitted" aria-label="제출여부 필터">
               <option value="">전체</option>
               <option value="yes">제출</option>
@@ -530,7 +539,7 @@
 </main>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="/js/admin.js?v=20.0.0"></script>
-<script src="/js/admin-vehicle-data-v31.js?v=31.4.0"></script>
+<script src="/js/admin-vehicle-data-v31.js?v=43.3.0"></script>
 <script src="/js/admin-group-v42.js?v=42.6.0"></script>
 </body>
 </html>
