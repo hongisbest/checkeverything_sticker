@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="BGF CHECK">
+<title>법인차량 홍보스티커 셀프점검</title>
+<link rel="stylesheet" href="/css/app.css?v=20.0.0">
+<link rel="stylesheet" href="/css/pc-layout-fix-v31.css?v=31.0.0">
+<link rel="stylesheet" href="/css/pwa-v32.css?v=32.0.0">
+<link rel="stylesheet" href="/css/group-inspection-v42.css?v=42.9.0">
+<link rel="manifest" href="/check/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/bgf-check-apple-180.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/bgf-check-32.png">
+</head>
+<body>
+<main class="container">
+<div id="runtimeErrorBanner" class="message error hidden runtime-error-banner" role="alert"></div>
+
+<section class="hero">
+  <div>
+    <p class="eyebrow">VEHICLE STICKER SELF INSPECTION</p>
+    <h1>법인차량 홍보스티커 셀프점검</h1>
+    <p class="sub">K3·아반떼·EV3 중 차종을 선택하면 해당 차종의 정상 예시사진만 기준으로 비교합니다. 차량은 흰색 기준이며 색상차이는 자동판정에서 제외합니다.</p>
+  </div>
+  <div class="hero-actions">
+    <span class="badge hero-badge">SELF INSPECTION</span>
+    <button id="installAppBtn" class="btn small install-app-btn" type="button">앱 설치</button>
+  </div>
+</section>
+
+<section class="card">
+  <div class="section-head">
+    <div><span class="step">STEP 01</span><h2>점검자 / 차량 정보</h2></div>
+  </div>
+  <div class="profile-grid">
+    <div class="form-group"><label>성명 *</label><input id="employeeName" type="text" required autocomplete="name"></div>
+    <div class="form-group"><label>사번 *</label><input id="employeeId" type="text" required></div>
+    <div class="form-group">
+      <label>부서 *</label>
+      <select id="department" required>
+        <option value="">부서를 선택해 주세요</option>
+      </select>
+    </div>
+    <div class="form-group"><label>차량번호 *</label><input id="vehicleNo" type="text" required placeholder="예: 222하1701"></div>
+  </div>
+  <div id="vehicleRegistryMessage" class="message info" style="margin-top:12px">
+    성명·사번·부서·차량번호를 모두 입력하면 관리자 등록 차량데이터와 자동으로 대조합니다.
+  </div>
+</section>
+
+<section id="stickerGuideSection" class="card">
+  <div class="section-head">
+    <div><span class="step">STEP 02</span><h2>점검할 스티커 / 촬영가이드</h2></div>
+    <span id="configStatus" class="badge">불러오는 중</span>
+  </div>
+
+  <div class="vehicle-select-block">
+    <span class="step">VEHICLE TYPE</span>
+    <h3>차량 종류를 선택해 주세요</h3>
+    <div id="vehicleTabs" class="vehicle-tabs">
+      <button class="vehicle-tab" type="button" data-vehicle="k3">K3</button>
+      <button class="vehicle-tab" type="button" data-vehicle="avante">아반떼</button>
+      <button class="vehicle-tab" type="button" data-vehicle="ev3">EV3</button>
+    </div>
+  </div>
+
+  <div class="sticker-select-block">
+    <span class="step">STICKER POSITION</span>
+    <h3>점검할 스티커를 선택해 주세요</h3>
+    <div id="stickerTabs" class="sticker-tabs"></div>
+  </div>
+
+  <div class="reference-layout">
+    <div id="referenceBox" class="reference-box guide-example-box">
+      <div class="empty">정상부착 예시사진 1번을 불러오는 중입니다.</div>
+    </div>
+    <div>
+      <span class="step">VEHICLE-SPECIFIC NORMAL GUIDE</span>
+      <h3 id="stickerTitle">촬영가이드</h3>
+      <div id="sideHintText" class="message info">부착 위치</div>
+      <div id="guideText" class="message info">촬영가이드</div>
+    </div>
+  </div>
+</section>
+
+
+<section id="groupInspectionFlow" class="card group-inspection-flow">
+  <div class="section-head">
+    <div>
+      <span class="step">STEP 03</span>
+      <h2>차량 1대 통합 점검</h2>
+    </div>
+    <span id="groupFlowStatus" class="badge">3면 촬영</span>
+  </div>
+
+  <div class="message info">
+    <b>운전석 → 조수석 → 후면</b> 순서로 사진을 등록하고,
+    각 사진에서 번호판 영역만 지정해 주세요.
+    3개 사진을 모두 준비한 뒤 한 번에 제출합니다.
+  </div>
+
+  <div class="group-progress">
+    <span id="groupProgressDriver" class="pill review">1 운전석</span>
+    <span id="groupProgressPassenger" class="pill review">2 조수석</span>
+    <span id="groupProgressRear" class="pill review">3 후면</span>
+  </div>
+
+  <div id="groupSideSteps"></div>
+
+  <div id="groupSubmitSummary" class="message info">
+    기본정보 확인 · 차종 선택 · 3개 촬영면 완료 후 제출할 수 있습니다.
+  </div>
+
+  <button id="groupSubmitBtn" class="btn primary full" type="button" disabled>
+    차량 점검 1건으로 제출
+  </button>
+
+  <div id="groupSubmitMessage" class="message info">
+    제출 시 운전석·조수석·후면 사진 3장을 하나의 차량 점검결과로 저장합니다.
+  </div>
+</section>
+
+
+<section class="card legacy-single-inspection">
+  <div class="section-head">
+    <div><span class="step">STEP 03</span><h2>차량사진 선택</h2></div>
+    <span class="badge">사진 1장</span>
+  </div>
+
+  <div class="message info photo-requirement">
+    <strong>차량번호판과 홍보스티커가 한 장에 함께 보이는 사진을 준비해 주세요.</strong>
+    세로·가로 방향은 자유이며 차량 전체를 담을 필요는 없습니다.
+    번호판과 스티커를 알아볼 수 있을 정도로 선명하게 촬영해 주세요.
+  </div>
+
+  <label class="btn primary full photo-file-button" style="margin-top:12px">
+    사진 촬영 / 앨범에서 선택
+    <input id="photoInput" type="file" accept="image/*" hidden>
+  </label>
+
+  <div class="message info" style="margin-top:10px">
+    사진을 선택한 뒤 번호판 영역만 지정합니다. 스티커 영역은 사용자가 지정하지 않습니다.
+  </div>
+
+  <!-- 기존 check.js 호환용 비표시 요소 -->
+  <div hidden aria-hidden="true">
+    <span id="cameraStatus">대기</span>
+    <div id="cameraStage">
+      <video id="cameraVideo" autoplay playsinline muted></video>
+      <div id="cameraPlaceholder"></div>
+    </div>
+    <button id="startCameraBtn" type="button" tabindex="-1">카메라 시작</button>
+    <button id="captureBtn" type="button" tabindex="-1" disabled>현재 화면 촬영</button>
+    <canvas id="captureCanvas"></canvas>
+  </div>
+</section>
+
+<section id="selectionSection" class="card hidden legacy-single-inspection">
+  <div class="section-head">
+    <div><span class="step">STEP 04</span><h2>필수영역 확인</h2></div>
+    <span id="selectionStatus" class="badge">스티커 선택</span>
+  </div>
+
+  <div class="message info">
+    사진에서 <b>차량번호판 영역만 지정</b>해 주세요.
+    스티커 영역은 선택한 차종의 정상예시를 기준으로 자동 분석됩니다.
+  </div>
+
+  <div class="selection-mode-bar">
+    <button id="stickerModeBtn" class="btn primary" type="button">① 스티커 영역 지정</button>
+    <button id="plateModeBtn" class="btn" type="button">② 번호판 영역 지정</button>
+    <div class="selection-progress">
+      <span id="stickerSelectionState" class="pill review">스티커 미지정</span>
+      <span id="plateSelectionState" class="pill review">번호판 미지정</span>
+    </div>
+  </div>
+
+  <div id="selectionStage" class="selection-stage" style="margin-top:12px">
+    <img id="selectionImage" alt="점검사진">
+    <div id="stickerSelectionBox" class="selection-box sticker-selection-box hidden"></div>
+    <div id="plateSelectionBox" class="selection-box plate-selection-box hidden"></div>
+    <div id="draftSelectionBox" class="selection-box draft-selection-box hidden"></div>
+  </div>
+
+  <div class="selection-actions">
+    <button id="resetStickerBtn" class="btn" type="button">스티커 다시 지정</button>
+    <button id="resetPlateBtn" class="btn" type="button">번호판 다시 지정</button>
+  </div>
+
+  <label class="missing-check" style="margin-top:10px">
+    <input id="stickerMissingCheck" type="checkbox">
+    <span>홍보스티커가 완전히 없어 스티커 영역을 지정할 수 없음</span>
+  </label>
+
+  <div id="requiredAreaMessage" class="message warn">
+    번호판 영역을 충분한 크기와 선명도로 지정해 주세요.
+  </div>
+
+  <button id="analyzeBtn" class="btn primary full" style="margin-top:12px" disabled>선택영역 확인하고 제출하기</button>
+</section>
+
+<section id="submissionSection" class="card hidden legacy-single-inspection">
+  <div class="section-head">
+    <div><span class="step">STEP 05</span><h2>제출 전 촬영내용 확인</h2></div>
+    <span class="badge">판정결과는 관리자 확인</span>
+  </div>
+
+  <div class="message info">
+    아래 촬영영역의 <b>크기와 선명도만 확인</b>해 주세요.
+    자동판정 결과는 제출 후 관리자 화면에만 표시됩니다.
+  </div>
+
+  <div class="capture-review-grid">
+    <div class="capture-review-card">
+      <div class="capture-review-head">
+        <div>
+          <span class="step">STICKER</span>
+          <h3>홍보스티커 확인</h3>
+        </div>
+        <span id="reviewStickerState" class="pill normal">확인완료</span>
+      </div>
+      <div id="reviewStickerCrop" class="capture-review-image"></div>
+      <div id="reviewStickerQuality" class="message info">스티커 촬영영역을 확인해 주세요.</div>
+    </div>
+
+    <div class="capture-review-card">
+      <div class="capture-review-head">
+        <div>
+          <span class="step">LICENSE PLATE</span>
+          <h3>차량번호판 확인</h3>
+        </div>
+        <span id="reviewPlateState" class="pill normal">확인완료</span>
+      </div>
+      <div id="reviewPlateCrop" class="capture-review-image"></div>
+      <div id="reviewPlateQuality" class="message info">번호판 촬영영역을 확인해 주세요.</div>
+
+      <!-- 기존 check.js 호환용 비표시 요소: 사용자에게 정보대조를 다시 보여주지 않음 -->
+      <div hidden aria-hidden="true">
+        <strong id="enteredVehicleNoPreview">-</strong>
+        <strong id="plateOcrPreview">확인 전</strong>
+        <div id="plateOcrMessage"></div>
+        <input id="plateMatchConfirm" type="checkbox">
+      </div>
+    </div>
+  </div>
+
+  <div class="final-review-check">
+    <strong>촬영상태 확인</strong>
+    <span>스티커와 번호판 영역이 충분히 크고 선명하게 보이는지만 확인한 뒤 제출해 주세요.</span>
+  </div>
+
+  <div class="submission-actions">
+    <button id="backToSelectionBtn" class="btn" type="button">영역 다시 확인</button>
+    <button id="submitBtn" class="btn primary" type="button">점검사진 제출</button>
+  </div>
+
+  <div id="submitLiveStatus" class="submit-live-status hidden" role="status" aria-live="assertive">
+    <div class="submit-spinner" aria-hidden="true"></div>
+    <div>
+      <strong id="submitLiveTitle">제출 준비 중</strong>
+      <span id="submitLiveDetail">잠시만 기다려 주세요.</span>
+    </div>
+  </div>
+
+  <div id="submitMessage" class="message info">
+    제출 버튼을 누르면 사진과 선택영역을 먼저 저장합니다. 저장 완료 후 자동으로 STEP 02로 돌아갑니다.
+  </div>
+</section>
+
+<!-- 내부 분석용: 사용자에게는 절대 표시하지 않음 -->
+<section id="analysisSection" class="hidden" aria-hidden="true" style="display:none!important">
+  <span id="resultStatus"></span>
+  <div id="resultPhoto"></div>
+  <div id="resultCrop"></div>
+  <strong id="scoreValue"></strong>
+  <strong id="confidenceValue"></strong>
+  <strong id="damageValue"></strong>
+  <strong id="shapeValue"></strong>
+  <strong id="colorValue"></strong>
+  <div id="findings"></div>
+</section>
+
+
+<div id="groupSubmitSuccessModal" class="group-submit-success-modal hidden" role="dialog" aria-modal="true">
+  <div class="group-submit-success-backdrop"></div>
+  <div class="group-submit-success-panel">
+    <div class="group-submit-success-icon">✓</div>
+    <span class="step">SUBMISSION COMPLETE</span>
+    <h2>점검사진 제출 완료</h2>
+    <p id="groupSubmitSuccessText" class="group-submit-success-text"></p>
+    <p id="groupSubmitSuccessReceipt" class="group-submit-success-receipt"></p>
+    <button id="groupReturnHomeBtn" class="btn primary full" type="button">처음으로 돌아가기</button>
+  </div>
+</div>
+
+<div id="groupCameraModal" class="group-camera-modal hidden" role="dialog" aria-modal="true">
+  <div class="group-camera-backdrop"></div>
+  <div class="group-camera-panel">
+    <div class="group-camera-head">
+      <div><span class="step">CAMERA ONLY</span><h2 id="groupCameraTitle">점검사진 촬영</h2></div>
+      <button id="groupCameraCloseBtn" class="btn small" type="button">취소</button>
+    </div>
+    <div class="group-camera-notice">앨범 사진은 사용할 수 없습니다. 현재 카메라로 직접 촬영해 주세요.</div>
+    <div class="group-camera-stage"><video id="groupCameraVideo" autoplay playsinline muted></video></div>
+    <div id="groupCameraMessage" class="message info">후면 카메라를 준비하고 있습니다.</div>
+    <button id="groupCameraCaptureBtn" class="btn primary full" type="button" disabled>현재 화면 촬영</button>
+    <canvas id="groupCameraCanvas" class="hidden" aria-hidden="true"></canvas>
+  </div>
+</div>
+
+</main>
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+<script src="/js/check.js?v=31.3.0"></script>
+<script src="/js/check-final-v30.js?v=30.8.1"></script>
+<script src="/js/check-vehicle-registry-v31.js?v=31.3.0"></script>
+<script src="/js/receipt-number-v33.js?v=33.0.0"></script>
+<script src="/js/pwa-install-v32.js?v=32.0.0"></script>
+<script src="/js/check-group-v42.js?v=42.9.0"></script>
+</body>
+</html>
